@@ -26,3 +26,12 @@ input reader. InputQueueTests reproduced the worker failure on the original code
 InputQueueTests exercises 30,000 ordered events, empty reads, nested dispatch and
 worker shutdown. Compare all other .cs/.resx files directly with the pinned tag
 when updating this dependency.
+
+NetWinVTConsole now snapshots stdin, stdout and stderr modes before changing any
+of them. stdout and stderr can be distinct handles for the same console buffer;
+the original order saved an already-modified stderr mode, then restored it last,
+leaking DISABLE_NEWLINE_AUTO_RETURN into OpenSSH after UI shutdown. Both output
+handles enable the same VT flags while the UI is active. ConsoleModeTests covers
+shared and separate buffers, repeated sessions and pre-existing output flags.
+The `--console-mode-check` test command exercises real Windows UI transitions and
+raw-LF synthetic SSH/SFTP prompts without credentials or a network connection.

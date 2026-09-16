@@ -10,10 +10,13 @@ if (args.Length == 1 && args[0] == "--auth-screen-demo")
     return await AuthenticationScreenDemo.RunAsync();
 if (args.Length == 1 && args[0] == "--preview-demo")
     return LayoutTests.RunPreviewDemo();
+if (args.Length == 1 && args[0] == "--console-mode-check")
+    return await ConsoleModeTests.RunNativeAsync();
 
 var tests = new List<(string Name, Func<Task> Run)>
 {
     ("input queue concurrency", InputQueueTests.RunAsync),
+    ("console mode restoration with shared output handles", ConsoleModeTests.RunAsync),
     ("completion", TestCompletion),
     ("file pane layout with wide names", LayoutTests.RunAsync),
     ("settings migration", TestSettingsMigration),

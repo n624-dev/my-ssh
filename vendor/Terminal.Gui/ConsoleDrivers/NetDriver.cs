@@ -18,57 +18,48 @@ namespace Terminal.Gui {
 	internal class NetWinVTConsole {
 		IntPtr InputHandle, OutputHandle, ErrorHandle;
 		uint originalInputConsoleMode, originalOutputConsoleMode, originalErrorConsoleMode;
+		readonly Action<IntPtr, uint> setMode;
 
-		public NetWinVTConsole ()
+		public NetWinVTConsole () : this (GetStdHandle, ReadMode, WriteMode)
 		{
-			InputHandle = GetStdHandle (STD_INPUT_HANDLE);
-			if (!GetConsoleMode (InputHandle, out uint mode)) {
-				throw new ApplicationException ($"Failed to get input console mode, error code: {GetLastError ()}.");
-			}
-			originalInputConsoleMode = mode;
-			if ((mode & ENABLE_VIRTUAL_TERMINAL_INPUT) < ENABLE_VIRTUAL_TERMINAL_INPUT) {
-				mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
-				if (!SetConsoleMode (InputHandle, mode)) {
-					throw new ApplicationException ($"Failed to set input console mode, error code: {GetLastError ()}.");
-				}
-			}
+		}
 
-			OutputHandle = GetStdHandle (STD_OUTPUT_HANDLE);
-			if (!GetConsoleMode (OutputHandle, out mode)) {
-				throw new ApplicationException ($"Failed to get output console mode, error code: {GetLastError ()}.");
-			}
-			originalOutputConsoleMode = mode;
-			if ((mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN)) < DISABLE_NEWLINE_AUTO_RETURN) {
-				mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-				if (!SetConsoleMode (OutputHandle, mode)) {
-					throw new ApplicationException ($"Failed to set output console mode, error code: {GetLastError ()}.");
-				}
-			}
-
-			ErrorHandle = GetStdHandle (STD_ERROR_HANDLE);
-			if (!GetConsoleMode (ErrorHandle, out mode)) {
-				throw new ApplicationException ($"Failed to get error console mode, error code: {GetLastError ()}.");
-			}
-			originalErrorConsoleMode = mode;
-			if ((mode & (DISABLE_NEWLINE_AUTO_RETURN)) < DISABLE_NEWLINE_AUTO_RETURN) {
-				mode |= DISABLE_NEWLINE_AUTO_RETURN;
-				if (!SetConsoleMode (ErrorHandle, mode)) {
-					throw new ApplicationException ($"Failed to set error console mode, error code: {GetLastError ()}.");
-				}
-			}
+		internal NetWinVTConsole (Func<int, IntPtr> getHandle, Func<IntPtr, uint> getMode, Action<IntPtr, uint> setMode)
+		{
+			this.setMode = setMode;
+			InputHandle = getHandle (STD_INPUT_HANDLE);
+			OutputHandle = getHandle (STD_OUTPUT_HANDLE);
+			ErrorHandle = getHandle (STD_ERROR_HANDLE);
+			// Different stdout/stderr handles can refer to the same console buffer.
+			// Capture every original mode before changing any of them, or stderr
+			// cleanup would restore the already-modified stdout mode.
+			originalInputConsoleMode = getMode (InputHandle);
+			originalOutputConsoleMode = getMode (OutputHandle);
+			originalErrorConsoleMode = getMode (ErrorHandle);
+			setMode (InputHandle, originalInputConsoleMode | ENABLE_VIRTUAL_TERMINAL_INPUT);
+			const uint outputFlags = ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+			setMode (OutputHandle, originalOutputConsoleMode | outputFlags);
+			setMode (ErrorHandle, originalErrorConsoleMode | outputFlags);
 		}
 
 		public void Cleanup ()
 		{
-			if (!SetConsoleMode (InputHandle, originalInputConsoleMode)) {
-				throw new ApplicationException ($"Failed to restore input console mode, error code: {GetLastError ()}.");
-			}
-			if (!SetConsoleMode (OutputHandle, originalOutputConsoleMode)) {
-				throw new ApplicationException ($"Failed to restore output console mode, error code: {GetLastError ()}.");
-			}
-			if (!SetConsoleMode (ErrorHandle, originalErrorConsoleMode)) {
-				throw new ApplicationException ($"Failed to restore error console mode, error code: {GetLastError ()}.");
-			}
+			setMode (InputHandle, originalInputConsoleMode);
+			setMode (OutputHandle, originalOutputConsoleMode);
+			setMode (ErrorHandle, originalErrorConsoleMode);
+		}
+
+		static uint ReadMode (IntPtr handle)
+		{
+			if (!GetConsoleMode (handle, out uint mode))
+				throw new ApplicationException ($"Failed to get console mode, error code: {GetLastError ()}.");
+			return mode;
+		}
+
+		static void WriteMode (IntPtr handle, uint mode)
+		{
+			if (!SetConsoleMode (handle, mode))
+				throw new ApplicationException ($"Failed to set console mode, error code: {GetLastError ()}.");
 		}
 
 		const int STD_INPUT_HANDLE = -10;
