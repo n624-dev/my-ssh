@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - run: dotnet restore MySsh.slnx
+      - run: dotnet build MySsh.slnx -c Release --no-restore
+      - run: dotnet run --project tests/MySsh.Tests/MySsh.Tests.csproj -c Release --no-build
+
+  publish:
+    name: Publish ${{ matrix.rid }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Publish
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet publish src/MySsh.App/MySsh.App.csproj \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained true \
+            -p:Version="$version" \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugSymbols=false \
+            -o "publish/${{ matrix.rid }}"
+      - name: Add command alias
+        shell: bash
+        run: |
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            cp "publish/${{ matrix.rid }}/my-ssh.exe" "publish/${{ matrix.rid }}/myssh.exe"
+          else
+            cp "publish/${{ matrix.rid }}/my-ssh" "publish/${{ matrix.rid }}/myssh"
+            chmod +x "publish/${{ matrix.rid }}/my-ssh" "publish/${{ matrix.rid }}/myssh"
+          fi
+      - name: Package Windows release
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          $archive = "release/my-ssh-${{ github.ref_name }}-${{ matrix.rid }}.zip"
+          Compress-Archive -Path "publish/${{ matrix.rid }}/*" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii "$archive.sha256"
+      - name: Package Linux release
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          mkdir -p release
+          archive="release/my-ssh-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz"
+          tar -C "publish/${{ matrix.rid }}" -czf "$archive" my-ssh myssh LICENSE Terminal.Gui.LICENSE
+          sha256sum "$archive" > "$archive.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: my-ssh-release-${{ matrix.rid }}
+          path: release/
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: my-ssh-release-*
+          path: release
+          merge-multiple: true
+      - name: Create or update release
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi

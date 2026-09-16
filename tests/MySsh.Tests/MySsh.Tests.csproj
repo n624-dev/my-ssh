@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/MySsh.App/MySsh.App.csproj" />
+    <ProjectReference Include="../../src/MySsh.Core/MySsh.Core.csproj" />
+    <ProjectReference Include="../../src/MySsh.Infrastructure/MySsh.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Restore
+        run: dotnet restore MySsh.slnx
+      - name: Build
+        run: dotnet build MySsh.slnx -c Release --no-restore
+      - name: Smoke tests
+        run: dotnet run --project tests/MySsh.Tests/MySsh.Tests.csproj -c Release --no-build
+      - name: Start isolated OpenSSH server
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/start-test-sshd.sh
+      - name: Real SSH and SFTP integration tests
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: dotnet run --project tests/MySsh.Tests/MySsh.Tests.csproj -c Release --no-build
+      - name: Stop isolated OpenSSH server
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [[ -n "${MYSSH_SSHD_DIR:-}" && -f "$MYSSH_SSHD_DIR/sshd.pid" ]]; then
+            sudo kill "$(cat "$MYSSH_SSHD_DIR/sshd.pid")"
+          fi
+
+  publish:
+    name: Publish ${{ matrix.rid }}
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Publish self-contained single file
+        shell: bash
+        run: >-
+          dotnet publish src/MySsh.App/MySsh.App.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugSymbols=false
+          -o publish/${{ matrix.rid }}
+      - name: Add myssh alias
+        shell: bash
+        run: |
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            cp "publish/${{ matrix.rid }}/my-ssh.exe" "publish/${{ matrix.rid }}/myssh.exe"
+          else
+            cp "publish/${{ matrix.rid }}/my-ssh" "publish/${{ matrix.rid }}/myssh"
+            chmod +x "publish/${{ matrix.rid }}/my-ssh" "publish/${{ matrix.rid }}/myssh"
+          fi
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: my-ssh-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}/
+          if-no-files-found: error
+      - name: Publish standalone verification runner
+        if: matrix.rid != 'linux-arm64'
+        shell: bash
+        run: >-
+          dotnet publish tests/MySsh.Tests/MySsh.Tests.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugSymbols=false -o verification/${{ matrix.rid }}
+      - name: Upload verification runner
+        if: matrix.rid != 'linux-arm64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: my-ssh-tests-${{ matrix.rid }}
+          path: verification/${{ matrix.rid }}/
+          if-no-files-found: error

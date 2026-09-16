@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>my-ssh</AssemblyName>
+    <RootNamespace>MySsh.App</RootNamespace>
+    <Version>2.0.0</Version>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="MySsh.Tests" />
+    <ProjectReference Include="../MySsh.Core/MySsh.Core.csproj" />
+    <ProjectReference Include="../MySsh.Infrastructure/MySsh.Infrastructure.csproj" />
+    <ProjectReference Include="../../vendor/Terminal.Gui/Terminal.Gui.csproj" />
+  </ItemGroup>
+</Project>

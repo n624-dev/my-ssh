@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MySsh.Core/MySsh.Core.csproj" />
+    <Project Path="src/MySsh.Infrastructure/MySsh.Infrastructure.csproj" />
+    <Project Path="src/MySsh.App/MySsh.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MySsh.Tests/MySsh.Tests.csproj" />
+  </Folder>
+</Solution>

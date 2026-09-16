@@ -1,0 +1,30 @@
+# Local configuration and credentials
+config.json
+state.json
+.env
+.env.*
+.ssh/
+.cloudflared/
+*.pem
+*.key
+
+# .NET build output
+**/bin/
+**/obj/
+publish/
+artifacts/
+verification/
+
+# IDE / editor
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Local artifacts
+*.log
+*.bak
+*.backup-*
+Thumbs.db
+.DS_Store
