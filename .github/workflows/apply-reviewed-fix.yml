@@ -1,0 +1,32 @@
+name: Apply reviewed fix patch
+
+on:
+  push:
+    branches: ['fix/issue-*']
+    paths: ['.github/reviewed-fix.patch']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: reviewed-fix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == 'n624-dev/my-ssh'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply explicit patch and remove temporary tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --recount --check .github/reviewed-fix.patch
+          git apply --recount --index .github/reviewed-fix.patch
+          git rm .github/reviewed-fix.patch .github/workflows/apply-reviewed-fix.yml
+          git diff --cached --check
+          git diff --cached --stat
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "fix: apply reviewed patch ($GITHUB_REF_NAME)"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
