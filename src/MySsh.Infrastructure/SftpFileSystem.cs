@@ -2,7 +2,7 @@ using MySsh.Core;
 
 namespace MySsh.Infrastructure;
 
-public sealed class SftpFileSystem : IFileSystem
+public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
 {
     private readonly Connection _connection;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -16,6 +16,10 @@ public sealed class SftpFileSystem : IFileSystem
     }
 
     public bool IsRemote => true;
+    // Reconnected and sibling sessions share a path namespace. User names are
+    // case-sensitive; SSH aliases are not. Different aliases may still refer to
+    // the same storage, but SFTP v3 cannot establish that cross-alias mapping.
+    public string PathNamespace => $"sftp:{_connection.User}@{_connection.Host.ToLowerInvariant()}";
     public StringComparison PathComparison => StringComparison.Ordinal;
 
     public static async Task<SftpFileSystem> ConnectAsync(
