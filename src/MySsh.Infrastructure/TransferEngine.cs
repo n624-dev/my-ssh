@@ -19,6 +19,10 @@ public sealed class TransferEngine
     {
         var root = await source.StatAsync(sourcePath, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("Source does not exist.", sourcePath);
+        // Reject self/descendant transfers before planning, creating partial files,
+        // replacing destinations, or scheduling any source deletion.
+        await TransferGuard.ValidateAsync(source, sourcePath, destination, destinationPath,
+            root.Kind, cancellationToken).ConfigureAwait(false);
         var plan = new List<(FileEntry Entry, string Source, string Destination)>();
         await BuildPlanAsync(source, destination, root, sourcePath, destinationPath, options, plan, cancellationToken).ConfigureAwait(false);
 
