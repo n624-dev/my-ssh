@@ -95,12 +95,15 @@ public sealed class EditSession
         {
             var current = await _fileSystem.StatAsync(Original.Path, ct).ConfigureAwait(false);
             if (current is null || current.Kind != Original.Kind || current.Length != Original.Length ||
-                current.Modified != Original.Modified)
-                throw new IOException("The original file changed. Your draft is retained; use Save as or keep it for recovery.");
+                current.Modified != Original.Modified || current.Mode != Original.Mode)
+                throw new IOException("The original file or its permissions changed. Your draft is retained; use Save as or keep it for recovery.");
         }
-        using var local = new LocalFileSystem();
-        await new TransferEngine().CopyAsync(local, DraftPath, _fileSystem, path,
-            new(PreserveMetadata: false, Conflict: replacingOriginal ? ConflictAction.Overwrite : ConflictAction.Ask),
+        // Preserve the target's permissions, not the private local draft's permissions.
+        // TransferEngine applies these to the partial file BEFORE the atomic rename;
+        // a chmod failure therefore cannot publish a file with incorrect permissions.
+        await using var contents = new EditContentFileSystem(Original.Mode);
+        await new TransferEngine().CopyAsync(contents, DraftPath, _fileSystem, path,
+            new(PreserveMetadata: true, Conflict: replacingOriginal ? ConflictAction.Overwrite : ConflictAction.Ask),
             null, ct).ConfigureAwait(false);
         Saved = true;
         // A cleanup error after commit is not a failed save and must not trigger another overwrite.
