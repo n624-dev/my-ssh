@@ -104,7 +104,8 @@ public static class PathSafety
 
     public static void ValidateChildName(string name, bool windows)
     {
-        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.Contains('/') || name.Contains('\0'))
+        // Whitespace-only names are legal on POSIX. Windows rules are applied below.
+        if (string.IsNullOrEmpty(name) || name is "." or ".." || name.Contains('/') || name.Contains('\0'))
             throw new IOException("Invalid filename component.");
         if (!windows) return;
 

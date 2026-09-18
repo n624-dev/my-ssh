@@ -46,21 +46,48 @@ internal sealed partial class FileManagerWindow
 
     private void QueueSelected(bool move)
     {
-        var source = _activeLocal ? _local : _remote;
-        var destination = _activeLocal ? _remote : _local;
-        var destinationDirectory = _activeLocal ? _currentRemote : _currentLocal;
-        var rows = SelectedRows(_activeLocal);
-        if (rows.Count == 0) return;
-
-        foreach (var row in rows)
+        var queued = 0;
+        try
         {
-            var destinationPath = destination.Join(destinationDirectory, row.Name);
-            _transfers.Enqueue(source, row.Path, destination, destinationPath,
-                new TransferOptions(Move: move, PreserveMetadata: _settings.Config.PreserveMetadata));
-        }
+            var source = _activeLocal ? _local : _remote;
+            var destination = _activeLocal ? _remote : _local;
+            var destinationDirectory = _activeLocal ? _currentRemote : _currentLocal;
+            var rows = SelectedRows(_activeLocal);
+            if (rows.Count == 0) return;
 
-        _message.Text = $"Queued {rows.Count} {(move ? "move" : "copy")} operation(s).";
-        RefreshQueue();
+            // Resolve the entire selection first. Cancelling a name prompt must
+            // not leave earlier items from this selection running in the queue.
+            var plan = TransferSelectionPlanner.Prepare(destination, destinationDirectory,
+                rows, ResolveInvalidTransferName);
+            if (plan.Cancelled)
+            {
+                _message.Text = "Selection cancelled; no new transfers were queued.";
+                return;
+            }
+            foreach (var item in plan.Entries)
+            {
+                _transfers.Enqueue(source, item.Source.Path, destination, item.Destination,
+                    new TransferOptions(Move: move, PreserveMetadata: _settings.Config.PreserveMetadata));
+                queued++;
+            }
+            _message.Text = $"Queued {queued} {(move ? "move" : "copy")} operation(s); skipped {plan.Skipped}.";
+            RefreshQueue();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.ErrorQuery(75, 10, "Transfer selection",
+                $"{queued} transfer(s) were queued.\n" + Safe(ex.Message), "OK");
+        }
+    }
+
+    private static InvalidNameDecision ResolveInvalidTransferName(string name, string error)
+    {
+        var selected = MessageBox.Query(75, 11, "Invalid destination name",
+            "Name: " + Safe(name) + "\n" + Safe(error), "Rename", "Skip", "Cancel selection");
+        if (selected == 1) return new(InvalidNameAction.Skip);
+        if (selected != 0) return new(InvalidNameAction.Cancel);
+        var replacement = Prompt("Destination name", "New name", name);
+        return replacement is null ? new(InvalidNameAction.Cancel) : new(InvalidNameAction.Rename, replacement);
     }
 
     private List<FileEntry> SelectedRows(bool localSide)
