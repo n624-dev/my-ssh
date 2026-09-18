@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      DOTNET_INSTALL_DIR: ${{ runner.temp }}/myssh-verification-dotnet
-      NUGET_PACKAGES: ${{ runner.temp }}/myssh-verification-packages
+      DOTNET_INSTALL_DIR: /tmp/myssh-verification-dotnet
+      NUGET_PACKAGES: /tmp/myssh-verification-packages
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
