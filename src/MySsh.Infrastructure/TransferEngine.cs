@@ -17,6 +17,7 @@ public sealed partial class TransferEngine
         var plan = new List<(FileEntry Entry, string Source, string Destination)>();
         await BuildPlanAsync(source, destination, root, sourcePath, destinationPath,
             options, plan, cancellationToken).ConfigureAwait(false);
+        ValidateDestinationNames(plan.Select(item => (item.Source, item.Destination)), destination.PathComparison);
 
         var totalBytes = plan.Where(x => x.Entry.Kind == EntryKind.File).Sum(x => x.Entry.Length);
         var skippedDirectories = new List<string>();
