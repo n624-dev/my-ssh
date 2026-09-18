@@ -44,7 +44,7 @@ internal sealed class SftpSession : IAsyncDisposable
     private const uint AttrTimes = 0x00000008;
     private const uint AttrExtended = 0x80000000;
 
-    private readonly Process _process;
+    private readonly Process? _process;
     private readonly Stream _input;
     private readonly Stream _output;
     private readonly SemaphoreSlim _requestLock = new(1, 1);
@@ -53,15 +53,42 @@ internal sealed class SftpSession : IAsyncDisposable
     private bool _disposed;
 
     private SftpSession(Process process)
+        : this(process.StandardInput.BaseStream, process.StandardOutput.BaseStream)
     {
         _process = process;
-        _input = process.StandardInput.BaseStream;
-        _output = process.StandardOutput.BaseStream;
+    }
+
+    private SftpSession(Stream input, Stream output)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!input.CanWrite || !output.CanRead)
+            throw new ArgumentException("SFTP transport requires writable input and readable output.");
+        _input = input;
+        _output = output;
     }
 
     public static async Task<SftpSession> ConnectAsync(Connection connection, CancellationToken cancellationToken)
     {
         var session = new SftpSession(OpenSsh.StartSftpSubsystem(connection));
+        try
+        {
+            await session.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            return session;
+        }
+        catch
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    // The session owns these streams. This transport seam exercises the real
+    // packet parser and stream lifecycle without a process or network connection.
+    internal static async Task<SftpSession> ConnectAsync(
+        Stream input, Stream output, CancellationToken cancellationToken)
+    {
+        var session = new SftpSession(input, output);
         try
         {
             await session.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -424,16 +451,20 @@ internal sealed class SftpSession : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
         try { _input.Close(); } catch { }
-        try
+        if (_process is not null)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch
+            {
+                try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { }
+            }
+            _process.Dispose();
         }
-        catch
-        {
-            try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { }
-        }
-        _process.Dispose();
+        try { _output.Close(); } catch { }
         _requestLock.Dispose();
     }
 

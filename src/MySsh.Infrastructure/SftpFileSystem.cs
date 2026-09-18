@@ -9,7 +9,7 @@ public sealed class SftpFileSystem : IFileSystem
     private SftpSession _session;
     private int _disposed;
 
-    private SftpFileSystem(Connection connection, SftpSession session)
+    internal SftpFileSystem(Connection connection, SftpSession session)
     {
         _connection = connection;
         _session = session;
@@ -249,9 +249,9 @@ public sealed class SftpFileSystem : IFileSystem
             _length = length;
         }
 
-        public override bool CanRead => !_writable;
-        public override bool CanSeek => true;
-        public override bool CanWrite => _writable;
+        public override bool CanRead => !_writable && Volatile.Read(ref _closed) == 0;
+        public override bool CanSeek => Volatile.Read(ref _closed) == 0;
+        public override bool CanWrite => _writable && Volatile.Read(ref _closed) == 0;
         public override long Length => _length;
         public override long Position { get => _position; set => Seek(value, SeekOrigin.Begin); }
         public override void Flush() { }
@@ -264,6 +264,7 @@ public sealed class SftpFileSystem : IFileSystem
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanRead) throw new NotSupportedException();
             if (buffer.Length == 0) return 0;
             var data = await _session.ReadAsync(
@@ -283,6 +284,7 @@ public sealed class SftpFileSystem : IFileSystem
             ReadOnlyMemory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanWrite) throw new NotSupportedException();
             var offset = 0;
             while (offset < buffer.Length)
@@ -301,6 +303,7 @@ public sealed class SftpFileSystem : IFileSystem
 
         public override long Seek(long offset, SeekOrigin origin)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             var next = origin switch
             {
                 SeekOrigin.Begin => offset,
@@ -317,19 +320,25 @@ public sealed class SftpFileSystem : IFileSystem
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && Interlocked.Exchange(ref _closed, 1) == 0)
-                CloseHandleBestEffortAsync().GetAwaiter().GetResult();
-            base.Dispose(disposing);
+            try
+            {
+                if (disposing && Interlocked.Exchange(ref _closed, 1) == 0)
+                    CloseHandleAsync().GetAwaiter().GetResult();
+            }
+            finally { base.Dispose(disposing); }
         }
 
         public override async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _closed, 1) == 0)
-                await CloseHandleBestEffortAsync().ConfigureAwait(false);
-            GC.SuppressFinalize(this);
+            try
+            {
+                if (Interlocked.Exchange(ref _closed, 1) == 0)
+                    await CloseHandleAsync().ConfigureAwait(false);
+            }
+            finally { GC.SuppressFinalize(this); }
         }
 
-        private async Task CloseHandleBestEffortAsync()
+        private async Task CloseHandleAsync()
         {
             using var timeout = new CancellationTokenSource(CloseTimeout);
             try
@@ -338,7 +347,13 @@ public sealed class SftpFileSystem : IFileSystem
             }
             catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
             {
-                // Cleanup must never hang or hide the original transfer/disconnect failure.
+                // A write can fail when the server flushes buffered data on CLOSE.
+                // Normal write completion must propagate this failure before rename
+                // or Move source deletion. Read-only handles remain cleanup-only.
+                if (_writable)
+                    throw new IOException(
+                        "SFTP write CLOSE was not acknowledged successfully; completion is unconfirmed. " +
+                        "The destination must not be committed and the source must be retained.", ex);
             }
         }
     }
