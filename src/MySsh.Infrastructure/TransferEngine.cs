@@ -159,6 +159,7 @@ public sealed partial class TransferEngine
             if (options.Conflict != ConflictAction.Overwrite || existing.Kind != EntryKind.File)
                 throw new TransferConflictException(destinationPath);
         }
+        var version = await DestinationSnapshot.CaptureAsync(destination, destinationPath, existing, ct).ConfigureAwait(false);
         var partial = destination.Join(destination.Parent(destinationPath),
             TransferTemporaryNames.Partial(destinationPath, sourcePath, sourceEntry));
         var partialEntry = await destination.StatAsync(partial, ct).ConfigureAwait(false);
@@ -205,6 +206,7 @@ public sealed partial class TransferEngine
             throw new IOException($"Transferred length mismatch: expected {sourceEntry.Length}, got {finalPartial.Length}.");
         if (options.PreserveMetadata)
             await destination.SetMetadataAsync(partial, sourceEntry.Modified, sourceEntry.Mode, ct).ConfigureAwait(false);
+        await version.VerifyAsync(destination, destinationPath, ct).ConfigureAwait(false);
         await destination.RenameAsync(partial, destinationPath, existing is not null, ct).ConfigureAwait(false);
         return new(sourceEntry.Length, false);
     }
@@ -249,11 +251,13 @@ public sealed partial class TransferEngine
             if (options.Conflict == ConflictAction.Cancel) throw new OperationCanceledException(ct);
             if (options.Conflict != ConflictAction.Overwrite) throw new TransferConflictException(destinationPath);
         }
+        var version = await DestinationSnapshot.CaptureAsync(destination, destinationPath, existing, ct).ConfigureAwait(false);
         var target = await source.ReadLinkAsync(sourcePath, ct).ConfigureAwait(false);
         var temporary = destination.Join(destination.Parent(destinationPath), TransferTemporaryNames.Link());
         await destination.CreateLinkAsync(temporary, target, ct).ConfigureAwait(false);
         try
         {
+            await version.VerifyAsync(destination, destinationPath, ct).ConfigureAwait(false);
             await destination.RenameAsync(temporary, destinationPath, existing is not null, ct).ConfigureAwait(false);
             return true;
         }
