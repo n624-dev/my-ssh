@@ -252,7 +252,7 @@ public sealed class TransferEngine
             partial,
             createNew: partialEntry is null,
             cancellationToken).ConfigureAwait(false);
-        await using (output.ConfigureAwait(false))
+        try
         {
             output.Seek(offset, SeekOrigin.Begin);
             var buffer = new byte[BufferSize];
@@ -266,6 +266,15 @@ public sealed class TransferEngine
             }
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch
+        {
+            // Error cleanup must not replace the write/read/cancel exception.
+            try { await output.DisposeAsync().ConfigureAwait(false); }
+            catch { }
+            throw;
+        }
+        // On success, close is part of write completion and must be acknowledged.
+        await output.DisposeAsync().ConfigureAwait(false);
 
         var finalPartial = await destination.StatAsync(partial, cancellationToken).ConfigureAwait(false)
             ?? throw new IOException("The transferred partial file disappeared before commit.");

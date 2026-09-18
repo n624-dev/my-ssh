@@ -34,6 +34,7 @@ var tests = new List<(string Name, Func<Task> Run)>
 };
 
 var failed = 0;
+tests.AddRange(RegressionCases.Load());
 if (Environment.GetEnvironmentVariable("MYSSH_TEST_HOST") is { Length: > 0 })
     tests.Add(("OpenSSH SFTP integration", SftpIntegration.RunAsync));
 
