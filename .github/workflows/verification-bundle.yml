@@ -1,0 +1,38 @@
+name: Temporary verification bundle
+
+on:
+  push:
+    branches: [fix/issue-1-sftp-close]
+    paths: [.github/workflows/verification-bundle.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}/myssh-verification-dotnet
+      NUGET_PACKAGES: ${{ runner.temp }}/myssh-verification-packages
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore MySsh.slnx
+      - name: Bundle only source, public SDK and restored public packages
+        shell: bash
+        run: |
+          mkdir verification-bundle
+          git archive --format=tar HEAD | gzip > verification-bundle/source.tar.gz
+          tar -C "$DOTNET_INSTALL_DIR" -czf verification-bundle/dotnet.tar.gz .
+          tar -C "$NUGET_PACKAGES" -czf verification-bundle/packages.tar.gz .
+          (cd verification-bundle && sha256sum *.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: myssh-isolated-verification-bundle
+          path: verification-bundle/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
