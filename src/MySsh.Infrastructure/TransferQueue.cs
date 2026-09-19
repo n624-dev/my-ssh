@@ -172,6 +172,14 @@ public sealed class TransferQueue : IAsyncDisposable
             finalState = TransferState.Completed;
             lock (_sync) finalMessage = string.IsNullOrWhiteSpace(job.Message) ? "Completed" : job.Message;
         }
+        catch (Exception ex) when (HasUnknownOutcome(ex))
+        {
+            // An interrupted state-changing request is not a clean Pause/Cancel.
+            // Keep the warning even if Close/Move wraps the transport exception.
+            finalState = TransferState.Partial;
+            finalMessage = "Result unknown: the server may have performed an interrupted operation. " +
+                "Reconnect and inspect source/destination before retrying. " + ex.Message;
+        }
         catch (OperationCanceledException)
         {
             // Cancellation state is resolved after cleanup so a pending Cancel overrides Pause.
@@ -214,6 +222,13 @@ public sealed class TransferQueue : IAsyncDisposable
                 job.FinishedAt = DateTimeOffset.UtcNow;
             }
         }
+    }
+
+    private static bool HasUnknownOutcome(Exception exception)
+    {
+        if (exception is ISftpRequestInterruption { OutcomeUnknown: true }) return true;
+        if (exception is AggregateException aggregate) return aggregate.InnerExceptions.Any(HasUnknownOutcome);
+        return exception.InnerException is { } inner && HasUnknownOutcome(inner);
     }
 
     public async ValueTask DisposeAsync()
