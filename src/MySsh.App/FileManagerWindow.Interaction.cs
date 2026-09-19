@@ -45,13 +45,18 @@ internal sealed partial class FileManagerWindow
             _pendingInteractionState = snapshot;
             return;
         }
-        _currentLocal = snapshot.LocalPath;
-        _currentRemote = snapshot.RemotePath;
+        var oldView = (_localFilter, _remoteFilter, _sortMode, _sortDescending);
         _localFilter = snapshot.LocalFilter;
         _remoteFilter = snapshot.RemoteFilter;
         _sortMode = (SortMode)snapshot.Sort;
         _sortDescending = snapshot.Descending;
-        ReloadAll();
+        try { NavigateBoth(snapshot.LocalPath, snapshot.RemotePath); }
+        catch (Exception ex)
+        {
+            (_localFilter, _remoteFilter, _sortMode, _sortDescending) = oldView;
+            _message.Text = "Restore failed: " + Safe(ex.Message);
+            return;
+        }
         foreach (var job in _transfers.Snapshot())
             if (job.State is TransferState.Completed or TransferState.Partial)
                 _reloadedCompleted.Add(job.Id);
@@ -63,8 +68,6 @@ internal sealed partial class FileManagerWindow
             var index = _queueRows.FindIndex(job => job.Id == id);
             if (index >= 0) _queueList.SelectedItem = index;
         }
-        // Closing a progress dialog can send Enter to the previously focused
-        // list. Restore the requested pane only after all I/O dialogs are done.
         _activeLocal = snapshot.ActiveLocal;
         if (snapshot.QueueFocused) _queueList.SetFocus();
         else if (snapshot.ActiveLocal) _localList.SetFocus();
