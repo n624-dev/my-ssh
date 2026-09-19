@@ -12,12 +12,14 @@ internal static class FileManagerSession
         await using var local = new LocalFileSystem();
         var connect = SftpFileSystem.ConnectAsync(connection, CancellationToken.None, interactions);
         await using var remote = await AuthenticateUntilCompletedAsync(interactions, connect);
-        await using var transfers = new TransferQueue(settings.Config.ParallelTransfers);
+        using var journal = new TransferJournal(Path.Combine(settings.DirectoryPath, "transfers"), connection.Key);
+        await using var transfers = new TransferQueue(settings.Config.ParallelTransfers, journal, local, remote);
         var state = settings.Browser(connection);
         FileManagerWindow.InteractionState? snapshot = null;
         ExternalEditorRequest? completedEditor = null;
         string? editorError = null;
-        string? connectionMessage = null;
+        string? connectionMessage = transfers.RecoveryWarnings.Count > 0
+            ? string.Join("\n", transfers.RecoveryWarnings) : null;
         try
         {
             while (true)
@@ -34,8 +36,6 @@ internal static class FileManagerSession
                     if (connectionMessage is not null) window.SetConnectionMessage(connectionMessage);
                     Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(50), _ =>
                     {
-                        // Never interrupt a modal editor, progress or confirmation
-                        // dialog to start another process that owns the terminal.
                         if (Application.Current != Application.Top || UiFileOperation.IsBusy) return true;
                         if (completedEditor is { } edited)
                         {
@@ -58,15 +58,10 @@ internal static class FileManagerSession
                     state.LocalPath = snapshot.LocalPath;
                     state.RemotePath = snapshot.RemotePath;
                 }
-                finally
-                {
-                    UiSessionCleanup.Run(settings.SaveState, Program.ShutdownUi);
-                }
+                finally { UiSessionCleanup.Run(settings.SaveState, Program.ShutdownUi); }
 
                 if (requestedEditor is not null)
                 {
-                    // No Terminal.Gui reader or timer is alive here. Pending
-                    // authentications wait; the transfer queue and drafts survive.
                     completedEditor = requestedEditor;
                     try { await ExternalEditorRunner.RunAsync(requestedEditor); }
                     catch (Exception ex) { editorError = ex.Message; }
@@ -94,11 +89,7 @@ internal static class FileManagerSession
                 }
             }
         }
-        finally
-        {
-            // Release queued authentication requests before joining workers.
-            interactions.Dispose();
-        }
+        finally { interactions.Dispose(); }
     }
 
     private static async Task<T> AuthenticateUntilCompletedAsync<T>(TerminalInteractionQueue interactions, Task<T> task)
@@ -113,11 +104,7 @@ internal static class FileManagerSession
 
     private static async Task AuthenticatePendingAsync(TerminalInteractionQueue interactions)
     {
-        ConsoleCancelEventHandler cancel = (_, args) =>
-        {
-            args.Cancel = true;
-            interactions.CancelPending();
-        };
+        ConsoleCancelEventHandler cancel = (_, args) => { args.Cancel = true; interactions.CancelPending(); };
         Console.CancelKeyPress += cancel;
         try
         {

@@ -2,26 +2,13 @@ using MySsh.Core;
 
 namespace MySsh.Infrastructure;
 
-public sealed record TransferJobSnapshot(
-    Guid Id,
-    string Source,
-    bool SourceIsRemote,
-    string Destination,
-    bool DestinationIsRemote,
-    bool Move,
-    TransferState State,
-    long BytesTransferred,
-    long? TotalBytes,
-    int CompletedEntries,
-    int TotalEntries,
-    string Message,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? StartedAt,
-    DateTimeOffset? FinishedAt)
+public sealed record TransferJobSnapshot(Guid Id, string Source, bool SourceIsRemote,
+    string Destination, bool DestinationIsRemote, bool Move, TransferState State,
+    long BytesTransferred, long? TotalBytes, int CompletedEntries, int TotalEntries,
+    string Message, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt)
 {
     public double? BytesPerSecond => StartedAt is { } started && BytesTransferred > 0
-        ? BytesTransferred / Math.Max(0.001, ((FinishedAt ?? DateTimeOffset.UtcNow) - started).TotalSeconds)
-        : null;
+        ? BytesTransferred / Math.Max(0.001, ((FinishedAt ?? DateTimeOffset.UtcNow) - started).TotalSeconds) : null;
 }
 
 public sealed class TransferQueue : IAsyncDisposable
@@ -30,21 +17,61 @@ public sealed class TransferQueue : IAsyncDisposable
     private readonly SemaphoreSlim _parallel;
     private readonly Dictionary<Guid, Job> _jobs = new();
     private readonly object _sync = new();
+    private readonly TransferJournal? _journal;
     private bool _disposed;
+    public IReadOnlyList<string> RecoveryWarnings => _journal?.RecoveryWarnings.ToArray() ?? [];
 
-    public TransferQueue(int parallelTransfers) =>
-        _parallel = new SemaphoreSlim(parallelTransfers, parallelTransfers);
+    public TransferQueue(int parallelTransfers) => _parallel = new(parallelTransfers, parallelTransfers);
 
-    public Guid Enqueue(IFileSystem source, string sourcePath, IFileSystem destination,
-        string destinationPath, TransferOptions options)
+    // Recovery binds jobs only to these already selected endpoints. Loading a
+    // checkpoint never opens a connection, starts a worker, or grants overwrite.
+    public TransferQueue(int parallelTransfers, TransferJournal journal, IFileSystem local, IFileSystem remote)
+        : this(parallelTransfers)
+    {
+        _journal = journal;
+        foreach (var saved in journal.Recover())
+        {
+            var s = saved.Snapshot;
+            var source = s.SourceIsRemote ? remote : local;
+            var destination = s.DestinationIsRemote ? remote : local;
+            if (source.IsRemote != s.SourceIsRemote || destination.IsRemote != s.DestinationIsRemote)
+            {
+                journal.RecoveryWarnings.Add("Checkpoint endpoint types do not match: " + s.Id);
+                journal.Release(s.Id);
+                continue;
+            }
+            var inspection = saved.Resume.SourceCleanupStarted && s.State != TransferState.Completed;
+            var state = inspection ? TransferState.Partial : s.State is TransferState.Running or TransferState.Queued
+                ? TransferState.Paused : s.State;
+            var job = new Job(source, s.Source, destination, s.Destination, saved.Options with { Conflict = ConflictAction.Ask })
+            {
+                Id = s.Id, CreatedAt = s.CreatedAt, State = state, ResumeState = TransferResumeState.Restore(saved.Resume),
+                BytesTransferred = s.BytesTransferred, TotalBytes = s.TotalBytes, CompletedEntries = s.CompletedEntries,
+                TotalEntries = s.TotalEntries, FinishedAt = s.FinishedAt, RequiresInspection = inspection,
+                Message = inspection ? "Source cleanup was interrupted. Inspect both sides; this job will not replay deletion. Remove it and explicitly queue remaining files." :
+                    state == TransferState.Paused ? "Recovered paused job. Resume explicitly; receipts and partial data will be revalidated." : s.Message
+            };
+            BindCheckpoint(job);
+            _jobs.Add(job.Id, job);
+        }
+    }
+
+    public Guid Enqueue(IFileSystem source, string sourcePath, IFileSystem destination, string destinationPath, TransferOptions options)
     {
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var job = new Job(source, sourcePath, destination, destinationPath, options);
-            _jobs.Add(job.Id, job);
-            Start(job);
-            return job.Id;
+            _journal?.Claim(job.Id);
+            try
+            {
+                BindCheckpoint(job);
+                SaveJob(job);
+                _jobs.Add(job.Id, job);
+                Start(job);
+                return job.Id;
+            }
+            catch { _jobs.Remove(job.Id); _journal?.Release(job.Id); throw; }
         }
     }
 
@@ -57,8 +84,7 @@ public sealed class TransferQueue : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || !_jobs.TryGetValue(id, out var job) ||
-                job.State is not (TransferState.Running or TransferState.Queued)) return false;
+            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State is not (TransferState.Running or TransferState.Queued)) return false;
             job.PauseRequested = true;
             job.Cancellation.Cancel();
             return true;
@@ -69,8 +95,7 @@ public sealed class TransferQueue : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || !_jobs.TryGetValue(id, out var job) ||
-                job.State is TransferState.Completed or TransferState.Cancelled) return false;
+            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State is TransferState.Completed or TransferState.Cancelled) return false;
             job.CancelRequested = true;
             job.PauseRequested = false;
             job.Cancellation.Cancel();
@@ -79,6 +104,7 @@ public sealed class TransferQueue : IAsyncDisposable
                 job.State = TransferState.Cancelled;
                 job.Message = "Cancelled. Partial data was retained for inspection or retry.";
                 job.FinishedAt = DateTimeOffset.UtcNow;
+                SaveJob(job);
             }
             return true;
         }
@@ -88,9 +114,8 @@ public sealed class TransferQueue : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State != TransferState.Paused)
-                return false;
-            job.PrepareForRun(resetProgressClock: false);
+            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State != TransferState.Paused || job.RequiresInspection) return false;
+            job.PrepareForRun(false);
             job.Message = "Queued for resume; completed and partial data will be verified using a fresh session.";
             Start(job);
             return true;
@@ -101,15 +126,15 @@ public sealed class TransferQueue : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || !_jobs.TryGetValue(id, out var job) ||
-                job.State is not (TransferState.Failed or TransferState.Partial or TransferState.Cancelled))
-                return false;
-            job.PrepareForRun(resetProgressClock: true);
+            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.RequiresInspection ||
+                job.State is not (TransferState.Failed or TransferState.Partial or TransferState.Cancelled)) return false;
+            job.PrepareForRun(true);
             if (conflict.HasValue) job.Options = job.Options with { Conflict = conflict.Value };
             if (!string.IsNullOrWhiteSpace(destinationPath) && destinationPath != job.DestinationPath)
             {
                 job.DestinationPath = destinationPath;
                 job.ResumeState = new();
+                BindCheckpoint(job);
             }
             job.Message = "Queued for retry with a fresh transfer session.";
             Start(job);
@@ -121,18 +146,27 @@ public sealed class TransferQueue : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || !_jobs.TryGetValue(id, out var job) ||
-                job.State is TransferState.Running or TransferState.Queued) return false;
+            if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State is TransferState.Running or TransferState.Queued) return false;
+            _journal?.Remove(id);
             _jobs.Remove(id);
             job.Cancellation.Dispose();
             return true;
         }
     }
 
-    // Called under _sync: queueing the task keeps file I/O off the UI thread.
+    private void BindCheckpoint(Job job) => job.ResumeState.Checkpoint = () => { lock (_sync) SaveJob(job); };
+    private void SaveJob(Job job)
+    {
+        _journal?.Save(new(job.Snapshot(), job.Options, job.ResumeState.Capture()));
+        job.LastCheckpoint = Environment.TickCount64;
+    }
+
     private void Start(Job job)
     {
+        var previous = job.State;
         job.State = TransferState.Queued;
+        try { SaveJob(job); }
+        catch { job.State = previous; throw; }
         job.RunTask = Task.Run(() => RunAsync(job));
     }
 
@@ -153,6 +187,7 @@ public sealed class TransferQueue : IAsyncDisposable
                 job.State = TransferState.Running;
                 job.StartedAt ??= DateTimeOffset.UtcNow;
                 job.Message = "Connecting transfer session...";
+                SaveJob(job);
             }
             var source = job.Source;
             var destination = job.Destination;
@@ -169,6 +204,7 @@ public sealed class TransferQueue : IAsyncDisposable
                     job.CompletedEntries = value.CompletedEntries;
                     job.TotalEntries = value.TotalEntries;
                     job.Message = value.Message;
+                    if (Environment.TickCount64 - job.LastCheckpoint >= 500) SaveJob(job);
                 }
             });
             await _engine.CopyAsync(source, job.SourcePath, destination, job.DestinationPath,
@@ -178,52 +214,36 @@ public sealed class TransferQueue : IAsyncDisposable
         }
         catch (Exception ex) when (HasUnknownOutcome(ex))
         {
-            // An interrupted state-changing request is not a clean Pause/Cancel.
-            // Keep the warning even if Close/Move wraps the transport exception.
             finalState = TransferState.Partial;
             finalMessage = "Result unknown: the server may have performed an interrupted operation. " +
                 "Reconnect and inspect source/destination before retrying. " + ex.Message;
         }
-        catch (OperationCanceledException)
-        {
-            // Cancellation state is resolved after cleanup so a pending Cancel overrides Pause.
-            finalState = TransferState.Cancelled;
-        }
-        catch (PartialMoveException ex)
-        {
-            finalState = TransferState.Partial;
-            finalMessage = ex.Message + " " + ex.InnerException?.Message;
-        }
-        catch (TransferConflictException ex)
-        {
-            finalMessage = ex.Message + " Choose overwrite, skip, rename, or cancel before retrying.";
-        }
+        catch (OperationCanceledException) { finalState = TransferState.Cancelled; }
+        catch (PartialMoveException ex) { finalState = TransferState.Partial; finalMessage = ex.Message + " " + ex.InnerException?.Message; }
+        catch (TransferConflictException ex) { finalMessage = ex.Message + " Choose overwrite, skip, rename, or cancel before retrying."; }
         catch (Exception ex) { finalMessage = ex.Message; }
         finally
         {
-            if (ownedDestination is not null)
-            {
-                try { await ownedDestination.DisposeAsync().ConfigureAwait(false); } catch { }
-            }
-            if (ownedSource is not null)
-            {
-                try { await ownedSource.DisposeAsync().ConfigureAwait(false); } catch { }
-            }
+            if (ownedDestination is not null) { try { await ownedDestination.DisposeAsync().ConfigureAwait(false); } catch { } }
+            if (ownedSource is not null) { try { await ownedSource.DisposeAsync().ConfigureAwait(false); } catch { } }
             if (entered) _parallel.Release();
-            // Publish a terminal state only when the old worker no longer uses its resources.
             lock (_sync)
             {
                 if (finalState == TransferState.Cancelled)
                 {
-                    finalState = job.PauseRequested && !job.CancelRequested && !_disposed
-                        ? TransferState.Paused : TransferState.Cancelled;
-                    finalMessage = finalState == TransferState.Paused
-                        ? "Paused. Resume will verify completed and partial data using a fresh session."
-                        : "Cancelled. Partial data was retained for inspection or retry.";
+                    var pause = !job.CancelRequested && (job.PauseRequested && !_disposed || _disposed && _journal is not null);
+                    finalState = pause ? TransferState.Paused : TransferState.Cancelled;
+                    finalMessage = pause ? "Paused. Resume will revalidate completed and partial data." : "Cancelled. Partial data was retained for inspection or retry.";
                 }
                 job.State = finalState;
                 job.Message = finalMessage;
                 job.FinishedAt = DateTimeOffset.UtcNow;
+                try { SaveJob(job); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    job.State = TransferState.Partial;
+                    job.Message = "Checkpoint could not be saved. Inspect files before retrying. " + ex.Message;
+                }
             }
         }
     }
@@ -245,12 +265,15 @@ public sealed class TransferQueue : IAsyncDisposable
             foreach (var job in _jobs.Values) job.Cancellation.Cancel();
             workers = _jobs.Values.Select(x => x.RunTask).ToArray();
         }
-        // Include queued workers and session cleanup, not just jobs labelled Running.
-        await Task.WhenAll(workers).ConfigureAwait(false);
-        lock (_sync)
+        try { await Task.WhenAll(workers).ConfigureAwait(false); }
+        finally
         {
-            foreach (var job in _jobs.Values) job.Cancellation.Dispose();
-            _parallel.Dispose();
+            lock (_sync)
+            {
+                foreach (var job in _jobs.Values) job.Cancellation.Dispose();
+                _parallel.Dispose();
+                _journal?.Dispose();
+            }
         }
     }
 
@@ -259,10 +282,9 @@ public sealed class TransferQueue : IAsyncDisposable
         public void Report(TransferProgress value) => report(value);
     }
 
-    private sealed class Job(IFileSystem source, string sourcePath, IFileSystem destination,
-        string destinationPath, TransferOptions options)
+    private sealed class Job(IFileSystem source, string sourcePath, IFileSystem destination, string destinationPath, TransferOptions options)
     {
-        public Guid Id { get; } = Guid.NewGuid();
+        public Guid Id { get; init; } = Guid.NewGuid();
         public IFileSystem Source { get; } = source;
         public string SourcePath { get; } = sourcePath;
         public IFileSystem Destination { get; } = destination;
@@ -274,34 +296,29 @@ public sealed class TransferQueue : IAsyncDisposable
         public CancellationTokenSource Cancellation { get; private set; } = new();
         public bool PauseRequested { get; set; }
         public bool CancelRequested { get; set; }
+        public bool RequiresInspection { get; init; }
+        public long LastCheckpoint { get; set; }
         public long BytesTransferred { get; set; }
         public long? TotalBytes { get; set; }
         public int CompletedEntries { get; set; }
         public int TotalEntries { get; set; }
         public string Message { get; set; } = "Queued";
-        public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? StartedAt { get; set; }
         public DateTimeOffset? FinishedAt { get; set; }
-
         public void PrepareForRun(bool resetProgressClock)
         {
             Cancellation.Dispose();
-            Cancellation = new CancellationTokenSource();
+            Cancellation = new();
             PauseRequested = false;
             CancelRequested = false;
             FinishedAt = null;
             if (resetProgressClock)
             {
-                StartedAt = null;
-                BytesTransferred = 0;
-                TotalBytes = null;
-                CompletedEntries = 0;
-                TotalEntries = 0;
+                StartedAt = null; BytesTransferred = 0; TotalBytes = null; CompletedEntries = 0; TotalEntries = 0;
             }
         }
-
-        public TransferJobSnapshot Snapshot() => new(Id, SourcePath, Source.IsRemote,
-            DestinationPath, Destination.IsRemote, Options.Move, State, BytesTransferred,
-            TotalBytes, CompletedEntries, TotalEntries, Message, CreatedAt, StartedAt, FinishedAt);
+        public TransferJobSnapshot Snapshot() => new(Id, SourcePath, Source.IsRemote, DestinationPath, Destination.IsRemote,
+            Options.Move, State, BytesTransferred, TotalBytes, CompletedEntries, TotalEntries, Message, CreatedAt, StartedAt, FinishedAt);
     }
 }
