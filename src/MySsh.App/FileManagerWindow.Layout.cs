@@ -101,24 +101,7 @@ internal sealed partial class FileManagerWindow : Window
         _message.Y = Pos.Bottom(queueFrame);
         _message.Width = Dim.Fill();
         _message.Height = 1;
-        var status = new StatusBar([
-            new StatusItem(KeyFor("help", Key.F1), "~F1~ Help", ShowHelp),
-            new StatusItem(KeyFor("rename", Key.F2), "~F2~ Rename", RenameSelected),
-            new StatusItem(KeyFor("copy", Key.F5), "~F5~ Copy", () => QueueSelected(move: false)),
-            new StatusItem(KeyFor("move", Key.F6), "~F6~ Move", () => QueueSelected(move: true)),
-            new StatusItem(KeyFor("mkdir", Key.F7), "~F7~ Mkdir", CreateDirectory),
-            new StatusItem(KeyFor("actions", Key.F9), "~F9~ Actions", ShowActions),
-            new StatusItem(KeyFor("delete", Key.DeleteChar), "~Del~ Delete", DeleteSelected),
-            new StatusItem(Key.Esc, "~Esc~ Back", () => Application.RequestStop())
-        ]);
-        Add(localFrame, remoteFrame, queueFrame, _message, status);
-    }
-
-    private Key KeyFor(string action, Key fallback)
-    {
-        if (_settings.Config.Keys.TryGetValue(action, out var configured) &&
-            Enum.TryParse<Key>(configured, ignoreCase: true, out var parsed)) return parsed;
-        return fallback;
+        Add(localFrame, remoteFrame, queueFrame, _message, CreateStatusBar());
     }
 
     private static void ConfigureList(ListView list)
