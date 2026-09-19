@@ -21,6 +21,7 @@ internal sealed partial class FileManagerWindow
     internal void NavigatePane(bool localSide, string path)
     {
         var fs = localSide ? _local : _remote;
+        path = NavigationPath.Resolve(localSide ? _currentLocal : _currentRemote, path, fs.IsRemote);
         var contents = UiFileOperation.Run("Open directory", ct => ReadPaneAsync(fs, path, ct));
         ApplyPane(localSide, contents);
         SaveBrowserState();
