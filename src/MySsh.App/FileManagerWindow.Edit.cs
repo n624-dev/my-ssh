@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using MySsh.Core;
 using MySsh.Infrastructure;
@@ -89,7 +88,7 @@ internal sealed partial class FileManagerWindow
             var location = _activeLocal ? "LOCAL" : _connection.Key;
             session = UiFileOperation.Run("Prepare edit draft", ct => EditSession.OpenAsync(fs, entry.Path,
                 Path.Combine(_settings.DirectoryPath, "edit-drafts"), location, ct));
-            if (external) ExternalEdit(session, fs);
+            if (external) RequestExternalEdit(session, fs);
             else BuiltInEdit(session, fs);
             if (session.Saved) ReloadPane(_activeLocal);
         }
@@ -137,41 +136,6 @@ internal sealed partial class FileManagerWindow
             try
             {
                 var destination = action == EditAction.SaveAs ? EditDestination(session, fs) : session.Original.Path;
-                if (destination is null) continue;
-                UiFileOperation.Run("Save edited file", ct => session.SaveAsync(destination, ct));
-            }
-            catch (Exception ex)
-            {
-                MessageBox.ErrorQuery(75, 12, "Save failed", Safe(ex.Message) + "\nDraft: " + Safe(session.DraftPath), "OK");
-            }
-        }
-    }
-
-    private void ExternalEdit(EditSession session, IFileSystem fs)
-    {
-        void RunEditor()
-        {
-            var info = new ProcessStartInfo(_settings.Config.Editor) { UseShellExecute = false };
-            foreach (var argument in _settings.Config.EditorArguments) info.ArgumentList.Add(argument);
-            info.ArgumentList.Add(session.DraftPath);
-            using var process = Process.Start(info) ?? throw new IOException("Could not start the configured editor.");
-            process.WaitForExit();
-            if (process.ExitCode != 0) throw new IOException($"Editor exited with code {process.ExitCode}.");
-        }
-        try { RunEditor(); }
-        catch (Exception ex) { MessageBox.ErrorQuery(75, 10, "Editor", Safe(ex.Message) + "\nYour draft has been retained.", "OK"); }
-        while (!session.Saved)
-        {
-            var action = Choose("Edited file", new List<object>
-            {
-                "Save to original", "Save as", "Re-edit", "Keep draft", "Discard draft"
-            });
-            if (action < 0 || action == 3) { ShowDraftLocation(session); return; }
-            try
-            {
-                if (action == 4) { if (ConfirmDiscard(session)) return; continue; }
-                if (action == 2) { RunEditor(); continue; }
-                var destination = action == 1 ? EditDestination(session, fs) : session.Original.Path;
                 if (destination is null) continue;
                 UiFileOperation.Run("Save edited file", ct => session.SaveAsync(destination, ct));
             }
