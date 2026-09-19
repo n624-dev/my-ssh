@@ -35,9 +35,12 @@ public sealed partial class LocalFileSystem : IFileSystem, IDisposable
         {
             var attributes = File.GetAttributes(path);
             var isDirectory = attributes.HasFlag(FileAttributes.Directory);
-            var isLink = attributes.HasFlag(FileAttributes.ReparsePoint);
             FileSystemInfo info = isDirectory ? new DirectoryInfo(path) : new FileInfo(path);
-            var kind = isLink ? EntryKind.SymbolicLink : isDirectory ? EntryKind.Directory : EntryKind.File;
+            var kind = OperatingSystem.IsWindows()
+                ? WindowsEntryKind.Read(path, attributes)
+                : attributes.HasFlag(FileAttributes.ReparsePoint) ? EntryKind.SymbolicLink
+                : isDirectory ? EntryKind.Directory : EntryKind.File;
+            var isLink = kind == EntryKind.SymbolicLink;
             var length = kind == EntryKind.File ? ((FileInfo)info).Length : 0;
             uint? mode = !OperatingSystem.IsWindows() && !isLink ? (uint)File.GetUnixFileMode(path) : null;
             return Task.FromResult<FileEntry?>(new(
