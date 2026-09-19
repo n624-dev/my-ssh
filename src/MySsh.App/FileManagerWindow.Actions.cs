@@ -161,26 +161,6 @@ internal sealed partial class FileManagerWindow
         MessageBox.ErrorQuery(Math.Min(75, Math.Max(1, Application.Driver.Cols - 2)),
             Math.Min(11, Math.Max(1, Application.Driver.Rows - 2)), title, Safe(error.Message), "OK");
 
-    private void ShowActions()
-    {
-        if (_queueList.HasFocus) { QueueActions(); return; }
-        var actions = new List<(string Name, Action Run)>
-        {
-            ("Go to path", GoToPath), ("Filter by name", SetFilter), ("Sort", ChooseSort),
-            ("Select all", () => MarkAll(true)), ("Clear selection", () => MarkAll(false)),
-            ("Refresh", () => ReloadPane(_activeLocal)),
-            (_state.ShowHidden ? "Hide hidden files" : "Show hidden files", ToggleHidden),
-            ("Preview / properties", PreviewSelected), ("Edit", EditSelected),
-            ("Permissions", ChangePermissions), ("Save bookmark", AddBookmark), ("Open bookmark", OpenBookmark)
-        };
-        if (_activeLocal) actions.Add(("Choose local root", ChooseLocalRoot));
-        else actions.Add(("Reconnect remote", RequestRemoteReconnect));
-        var selected = Choose("Actions", actions.Select(x => (object)x.Name).ToList());
-        if (selected < 0) return;
-        try { actions[selected].Run(); }
-        catch (Exception ex) { ShowOperationError(actions[selected].Name, ex); }
-    }
-
     private void ToggleHidden()
     {
         _state.ShowHidden = !_state.ShowHidden;
