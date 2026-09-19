@@ -18,13 +18,11 @@ internal sealed class AuthenticationPaneStateCase : IRegressionCase
         File.WriteAllText(Path.Combine(path, "first.txt"), "first");
         File.WriteAllText(Path.Combine(path, "second.txt"), "second");
         var queue = new TransferQueue(1);
-        var driver = new FakeDriver();
-        Application.Init(driver);
+        Application.Init(new FakeDriver());
         try
         {
             var state = new BrowserState { LocalPath = path, RemotePath = path };
             using var window = new FileManagerWindow(new Connection("local.test", "test"), local, remote, state, settings, queue);
-            Application.Top.Add(window);
             var initial = window.CaptureInteractionState();
             var desired = initial with
             {
@@ -32,12 +30,20 @@ internal sealed class AuthenticationPaneStateCase : IRegressionCase
                 Local = new(Path.Combine(path, "second.txt"), [Path.Combine(path, "first.txt"), Path.Combine(path, "second.txt")]),
                 Remote = new(Path.Combine(path, "first.txt"), [Path.Combine(path, "first.txt")])
             };
+            // Matches production: supply the snapshot before Begin, but load its
+            // paths/rows only after the parent run-state exists.
             window.RestoreInteractionState(desired);
-            var restored = window.CaptureInteractionState();
-            RegressionCases.Check(restored.Local.Selected == desired.Local.Selected, "Local cursor was lost.");
-            RegressionCases.Check(restored.Local.Marked.Order().SequenceEqual(desired.Local.Marked.Order()), "Local marks were lost.");
-            RegressionCases.Check(restored.Remote.Marked.SequenceEqual(desired.Remote.Marked), "Remote marks were lost.");
-            RegressionCases.Check(!restored.ActiveLocal, "Active pane changed.");
+            Application.Top.Add(window);
+            var run = Application.Begin(Application.Top);
+            try
+            {
+                var restored = window.CaptureInteractionState();
+                RegressionCases.Check(restored.Local.Selected == desired.Local.Selected, "Local cursor was lost.");
+                RegressionCases.Check(restored.Local.Marked.Order().SequenceEqual(desired.Local.Marked.Order()), "Local marks were lost.");
+                RegressionCases.Check(restored.Remote.Marked.SequenceEqual(desired.Remote.Marked), "Remote marks were lost.");
+                RegressionCases.Check(!restored.ActiveLocal, "Active pane changed.");
+            }
+            finally { Application.End(run); }
         }
         finally
         {

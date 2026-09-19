@@ -10,6 +10,7 @@ internal sealed class Issue16Tests : IRegressionCase
     public Task RunAsync()
     {
         Application.Init(new FakeDriver());
+        var run = Application.Begin(Application.Top);
         try
         {
             var uiThread = Environment.CurrentManagedThreadId;
@@ -21,19 +22,17 @@ internal sealed class Issue16Tests : IRegressionCase
                 var answer = UiFileOperation.Run("Delayed operation", async ct =>
                 {
                     workerThread = Environment.CurrentManagedThreadId;
-                    // Cover a backend's synchronous prefix before its first await.
                     Thread.Sleep(80);
                     await Task.Delay(60, ct).ConfigureAwait(false);
                     return 42;
                 });
                 RegressionCases.Check(answer == 42 && workerThread != uiThread && ticks >= 3,
                     "The filesystem call blocked the UI thread or its event loop.");
-
                 var stopped = false;
                 var cancel = Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(40), _ =>
                 {
                     if (Application.Current is not Dialog dialog || dialog.Title.ToString() != "Cancel operation") return true;
-                    Application.RequestStop(dialog); // Same close path used by Esc.
+                    Application.RequestStop(dialog);
                     return false;
                 });
                 try
@@ -45,8 +44,7 @@ internal sealed class Issue16Tests : IRegressionCase
                     }));
                 }
                 finally { Application.MainLoop.RemoveTimeout(cancel); }
-                RegressionCases.Check(stopped && !UiFileOperation.IsBusy,
-                    "Cancellation returned before worker cleanup or left the UI busy.");
+                RegressionCases.Check(stopped && !UiFileOperation.IsBusy, "Cancellation returned before cleanup or left the UI busy.");
                 Expect<TimeoutException>(() => UiFileOperation.Run("Timeout operation",
                     ct => Task.Delay(Timeout.Infinite, ct), TimeSpan.FromMilliseconds(60)));
                 Expect<IOException>(() => UiFileOperation.Run("Failing operation",
@@ -58,7 +56,11 @@ internal sealed class Issue16Tests : IRegressionCase
             }
             finally { Application.MainLoop.RemoveTimeout(heartbeat); }
         }
-        finally { MySsh.App.Program.ShutdownUi(); }
+        finally
+        {
+            Application.End(run);
+            MySsh.App.Program.ShutdownUi();
+        }
         return Task.CompletedTask;
     }
 
@@ -70,8 +72,7 @@ internal sealed class Issue16Tests : IRegressionCase
         {
             Expect<TimeoutException>(() => UiFileOperation.Run("Unresponsive SFTP",
                 ct => session.ListAsync("directory", ct), TimeSpan.FromMilliseconds(100)));
-            RegressionCases.Check(session.IsFaulted && replies.Closed,
-                "Timed-out SFTP listing did not close its interrupted transport.");
+            RegressionCases.Check(session.IsFaulted && replies.Closed, "Timed-out SFTP did not close its transport.");
         }
         finally { session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }
@@ -87,8 +88,11 @@ internal sealed class Issue16Tests : IRegressionCase
         {
             using var window = new FileManagerWindow(new Connection("fixture.test", "test"), local, remote,
                 new BrowserState { LocalPath = root.Path, RemotePath = root.Path }, settings, queue);
-            RegressionCases.Check(remote.Calls >= 2 && !remote.CalledOnUi,
-                "Browser path/listing I/O still ran on the UI thread.");
+            RegressionCases.Check(remote.Calls == 0, "The window constructor started filesystem work.");
+            Application.Top.Add(window);
+            window.InitializeBrowser();
+            RegressionCases.Check(remote.Calls >= 2 && !remote.CalledOnUi, "Browser I/O still ran on the UI thread.");
+            Application.Top.Remove(window);
         }
         finally { queue.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }

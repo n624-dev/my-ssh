@@ -52,10 +52,10 @@ internal sealed partial class FileManagerWindow : Window
         Height = Dim.Fill();
         ConfigureLayout();
         ConfigureEvents();
-        ReloadAll();
+        Loaded += InitializeBrowser;
         Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(300), _ =>
         {
-            RefreshQueue();
+            if (_browserLoaded) RefreshQueue();
             return true;
         });
     }
