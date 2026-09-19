@@ -6,7 +6,7 @@ public sealed partial class TransferEngine
 {
     private static async Task<FileCopyResult> CopyFileAsync(IFileSystem source, string sourcePath,
         FileEntry sourceEntry, IFileSystem destination, string destinationPath, TransferOptions options,
-        Action<long> reportFileBytes, CancellationToken ct)
+        Action<long> reportFileBytes, CancellationToken ct, TransferResumeState? resume)
     {
         var existing = await destination.StatAsync(destinationPath, ct).ConfigureAwait(false);
         if (existing is not null)
@@ -67,11 +67,15 @@ public sealed partial class TransferEngine
             throw new IOException($"Transferred file mismatch: expected a regular file of {sourceEntry.Length} bytes.");
 
         // Verify ordinary Copy as well as Move, including resumed prefixes.
-        await SourceIntegrity.VerifyAsync(source, sourcePath, sourceEntry, destination, partial, ct).ConfigureAwait(false);
+        var digest = await SourceIntegrity.VerifyAsync(source, sourcePath, sourceEntry, destination, partial, ct).ConfigureAwait(false);
         if (options.PreserveMetadata)
             await destination.SetMetadataAsync(partial, sourceEntry.Modified, sourceEntry.Mode, ct).ConfigureAwait(false);
+        var committedMetadata = resume is null ? null : await destination.StatAsync(partial, ct).ConfigureAwait(false)
+            ?? throw new IOException("Temporary file disappeared before recording its commit.");
         await version.VerifyAsync(destination, destinationPath, ct).ConfigureAwait(false);
         await destination.RenameAsync(partial, destinationPath, existing is not null, ct).ConfigureAwait(false);
+        // No cancellable work between acknowledged rename and recording ownership.
+        if (committedMetadata is not null) resume!.Record(sourcePath, sourceEntry, destinationPath, committedMetadata, digest);
         return new(sourceEntry.Length, false);
     }
 }

@@ -8,8 +8,10 @@ public sealed partial class TransferEngine
 
     public async Task CopyAsync(IFileSystem source, string sourcePath,
         IFileSystem destination, string destinationPath, TransferOptions options,
-        IProgress<TransferProgress>? progress, CancellationToken cancellationToken)
+        IProgress<TransferProgress>? progress, CancellationToken cancellationToken,
+        TransferResumeState? resume = null)
     {
+        using var resumeLease = resume?.Enter(source, sourcePath, destination, destinationPath);
         var root = await source.StatAsync(sourcePath, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("Source does not exist.", sourcePath);
         await TransferGuard.ValidateAsync(source, sourcePath, destination, destinationPath,
@@ -37,7 +39,18 @@ public sealed partial class TransferEngine
             }
             progress?.Report(new(item.Source, item.Destination, transferred, totalBytes,
                 completed, plan.Count, TransferState.Running));
-            switch (item.Entry.Kind)
+            var receipt = resume is null ? TransferResumeState.ResumeResult.NotRecorded :
+                await resume.VerifyAsync(source, item.Source, destination, item.Destination,
+                    options.Conflict, cancellationToken).ConfigureAwait(false);
+            if (receipt == TransferResumeState.ResumeResult.Verified)
+            {
+                if (item.Entry.Kind == EntryKind.File) transferred += item.Entry.Length;
+            }
+            else if (receipt == TransferResumeState.ResumeResult.Skipped)
+            {
+                skipped++;
+            }
+            else switch (item.Entry.Kind)
             {
                 case EntryKind.Directory:
                 {
@@ -48,8 +61,12 @@ public sealed partial class TransferEngine
                         skippedDirectories.Add(item.Destination);
                         skipped++;
                     }
-                    else if (result == DirectoryResult.Created)
-                        createdDirectories.Add((item.Entry, item.Destination));
+                    else
+                    {
+                        if (result == DirectoryResult.Created) resume?.RecordDirectory(item.Source, item.Destination);
+                        if (result == DirectoryResult.Created || resume?.CreatedDirectory(item.Source, item.Destination) == true)
+                            createdDirectories.Add((item.Entry, item.Destination));
+                    }
                     break;
                 }
                 case EntryKind.File:
@@ -59,14 +76,14 @@ public sealed partial class TransferEngine
                         destination, item.Destination, options,
                         currentFileBytes => progress?.Report(new(item.Source, item.Destination,
                             beforeFile + currentFileBytes, totalBytes, completed, plan.Count, TransferState.Running)),
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken, resume).ConfigureAwait(false);
                     if (result.Skipped) skipped++;
                     else transferred += result.LogicalBytes;
                     break;
                 }
                 case EntryKind.SymbolicLink:
-                    if (!await CopyLinkAsync(source, item.Source, destination, item.Destination,
-                        options, cancellationToken).ConfigureAwait(false)) skipped++;
+                    if (!await CopyLinkAsync(source, item.Source, item.Entry, destination, item.Destination,
+                        options, cancellationToken, resume).ConfigureAwait(false)) skipped++;
                     break;
                 default:
                     throw new IOException($"Unsupported entry type: {item.Source}");
@@ -92,9 +109,15 @@ public sealed partial class TransferEngine
             }
             try
             {
-                // Delete only the copied plan, never newly created source entries.
+                // Revalidate resumed destinations too, before deleting any source.
                 foreach (var item in plan)
+                {
                     await VerifyMoveSourceAsync(source, item.Source, item.Entry, cancellationToken).ConfigureAwait(false);
+                    if (resume is not null && item.Entry.Kind is EntryKind.File or EntryKind.SymbolicLink)
+                        await resume.VerifyAsync(source, item.Source, destination, item.Destination,
+                            ConflictAction.Ask, cancellationToken).ConfigureAwait(false);
+                }
+                // Delete only the copied plan, never newly created source entries.
                 foreach (var item in plan.AsEnumerable().Reverse())
                 {
                     await VerifyMoveSourceAsync(source, item.Source, item.Entry, cancellationToken).ConfigureAwait(false);
@@ -177,8 +200,8 @@ public sealed partial class TransferEngine
         }
     }
 
-    private static async Task<bool> CopyLinkAsync(IFileSystem source, string sourcePath,
-        IFileSystem destination, string destinationPath, TransferOptions options, CancellationToken ct)
+    private static async Task<bool> CopyLinkAsync(IFileSystem source, string sourcePath, FileEntry sourceEntry,
+        IFileSystem destination, string destinationPath, TransferOptions options, CancellationToken ct, TransferResumeState? resume)
     {
         var existing = await destination.StatAsync(destinationPath, ct).ConfigureAwait(false);
         if (existing is not null)
@@ -193,8 +216,18 @@ public sealed partial class TransferEngine
         await destination.CreateLinkAsync(temporary, target, ct).ConfigureAwait(false);
         try
         {
+            FileEntry? committedMetadata = null;
+            if (resume is not null)
+            {
+                if (target != sourceEntry.LinkTarget ||
+                    !DestinationSnapshot.SameMetadata(sourceEntry, await source.StatAsync(sourcePath, ct).ConfigureAwait(false)))
+                    throw new IOException("Source link changed while copying; it was not committed.");
+                committedMetadata = await destination.StatAsync(temporary, ct).ConfigureAwait(false)
+                    ?? throw new IOException("Temporary link disappeared before commit.");
+            }
             await version.VerifyAsync(destination, destinationPath, ct).ConfigureAwait(false);
             await destination.RenameAsync(temporary, destinationPath, existing is not null, ct).ConfigureAwait(false);
+            if (committedMetadata is not null) resume!.Record(sourcePath, sourceEntry, destinationPath, committedMetadata, null);
             return true;
         }
         catch
