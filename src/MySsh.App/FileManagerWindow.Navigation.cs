@@ -49,7 +49,13 @@ internal sealed partial class FileManagerWindow
         if (!string.IsNullOrWhiteSpace(filter)) label += $"  [filter: {Safe(filter)}]";
         label += $"  [sort: {_sortMode}{(_sortDescending ? " desc" : "")}]";
         var list = localSide ? _localList : _remoteList;
+        var oldRows = localSide ? _localRows : _remoteRows;
+        var fs = localSide ? _local : _remote;
+        var sameDirectory = contents.Path.Equals(localSide ? _currentLocal : _currentRemote, fs.PathComparison);
+        var selection = sameDirectory ? CapturePane(list, oldRows) : null;
+        var top = list.TopItem;
         list.SetSource((IList)rows);
+        list.SelectedItem = 0;
         if (localSide)
         {
             _currentLocal = contents.Path;
@@ -61,6 +67,13 @@ internal sealed partial class FileManagerWindow
             _currentRemote = contents.Path;
             _remoteRows = rows;
             _remotePath.Text = label;
+        }
+        // Never copy marks by row index: additions and re-sorting change indices.
+        // Missing or filtered-out paths are deliberately not selected.
+        if (selection is not null)
+        {
+            RestorePane(list, rows, selection, fs.PathComparison);
+            list.TopItem = Math.Clamp(top, 0, rows.Count - 1);
         }
     }
 }
