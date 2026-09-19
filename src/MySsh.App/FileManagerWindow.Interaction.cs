@@ -7,7 +7,6 @@ namespace MySsh.App;
 internal sealed partial class FileManagerWindow
 {
     internal bool ReconnectRequested { get; private set; }
-
     private void RequestRemoteReconnect()
     {
         if (_remote is not SftpFileSystem)
@@ -40,49 +39,51 @@ internal sealed partial class FileManagerWindow
 
     internal void RestoreInteractionState(InteractionState snapshot)
     {
-        if (!_browserLoaded)
-        {
-            _pendingInteractionState = snapshot;
-            return;
-        }
+        if (!_browserLoaded) { _pendingInteractionState = snapshot; return; }
         var oldView = (_localFilter, _remoteFilter, _sortMode, _sortDescending);
-        _localFilter = snapshot.LocalFilter;
-        _remoteFilter = snapshot.RemoteFilter;
-        _sortMode = (SortMode)snapshot.Sort;
-        _sortDescending = snapshot.Descending;
-        try { NavigateBoth(snapshot.LocalPath, snapshot.RemotePath); }
-        catch (Exception ex)
+        _restoringState = true;
+        try
         {
-            (_localFilter, _remoteFilter, _sortMode, _sortDescending) = oldView;
-            _message.Text = "Restore failed: " + Safe(ex.Message);
-            return;
+            _localFilter = snapshot.LocalFilter;
+            _remoteFilter = snapshot.RemoteFilter;
+            _sortMode = Enum.IsDefined((SortMode)snapshot.Sort) ? (SortMode)snapshot.Sort : SortMode.Name;
+            _sortDescending = snapshot.Descending;
+            try { NavigateBoth(snapshot.LocalPath, snapshot.RemotePath); }
+            catch (Exception ex)
+            {
+                (_localFilter, _remoteFilter, _sortMode, _sortDescending) = oldView;
+                _message.Text = "Restore failed: " + Safe(ex.Message);
+                return;
+            }
+            foreach (var job in _transfers.Snapshot())
+                if (job.State is TransferState.Completed or TransferState.Partial) _reloadedCompleted.Add(job.Id);
+            RefreshQueue();
+            RestorePane(_localList, _localRows, snapshot.Local, _local.PathComparison);
+            RestorePane(_remoteList, _remoteRows, snapshot.Remote, _remote.PathComparison);
+            if (snapshot.SelectedJob is { } id)
+            {
+                var index = _queueRows.FindIndex(job => job.Id == id);
+                if (index >= 0) _queueList.SelectedItem = index;
+            }
+            _activeLocal = snapshot.ActiveLocal;
+            if (snapshot.QueueFocused) _queueList.SetFocus();
+            else if (snapshot.ActiveLocal) _localList.SetFocus();
+            else _remoteList.SetFocus();
         }
-        foreach (var job in _transfers.Snapshot())
-            if (job.State is TransferState.Completed or TransferState.Partial)
-                _reloadedCompleted.Add(job.Id);
-        RefreshQueue();
-        RestorePane(_localList, _localRows, snapshot.Local, _local.PathComparison);
-        RestorePane(_remoteList, _remoteRows, snapshot.Remote, _remote.PathComparison);
-        if (snapshot.SelectedJob is { } id)
-        {
-            var index = _queueRows.FindIndex(job => job.Id == id);
-            if (index >= 0) _queueList.SelectedItem = index;
-        }
-        _activeLocal = snapshot.ActiveLocal;
-        if (snapshot.QueueFocused) _queueList.SetFocus();
-        else if (snapshot.ActiveLocal) _localList.SetFocus();
-        else _remoteList.SetFocus();
+        finally { _restoringState = false; }
+        SaveBrowserState();
     }
 
     private static void RestorePane(ListView list, List<BrowserRow> rows,
         PaneInteractionState snapshot, StringComparison comparison)
     {
+        list.SelectedItem = 0;
         for (var index = 0; index < rows.Count; index++)
         {
             var entry = rows[index].Entry;
             if (entry is null) continue;
             if (entry.Path.Equals(snapshot.Selected, comparison)) list.SelectedItem = index;
-            list.Source?.SetMark(index, snapshot.Marked.Any(path => path.Equals(entry.Path, comparison)));
+            list.Source?.SetMark(index, snapshot.Marked.Any(path => entry.Path.Equals(path, comparison)));
         }
         list.SetNeedsDisplay();
     }

@@ -27,13 +27,8 @@ public sealed class AppConfig
     public List<string> EditorArguments { get; set; } = [];
     public Dictionary<string, string> Keys { get; set; } = new()
     {
-        ["copy"] = "F5",
-        ["move"] = "F6",
-        ["rename"] = "F2",
-        ["mkdir"] = "F7",
-        ["delete"] = "DeleteChar",
-        ["actions"] = "F9",
-        ["help"] = "F1"
+        ["copy"] = "F5", ["move"] = "F6", ["rename"] = "F2", ["mkdir"] = "F7",
+        ["delete"] = "DeleteChar", ["actions"] = "F9", ["help"] = "F1"
     };
     [JsonExtensionData] public Dictionary<string, System.Text.Json.JsonElement>? Extra { get; set; }
 }
@@ -56,22 +51,22 @@ public sealed class BrowserState
     public string RemotePath { get; set; } = ".";
     public string? LocalSelection { get; set; }
     public string? RemoteSelection { get; set; }
+    public List<string> LocalMarked { get; set; } = [];
+    public List<string> RemoteMarked { get; set; } = [];
+    public string LocalFilter { get; set; } = "";
+    public string RemoteFilter { get; set; } = "";
+    public string Sort { get; set; } = "Name";
+    public bool SortDescending { get; set; }
+    public bool ActiveLocal { get; set; } = true;
     public bool ShowHidden { get; set; }
     public List<Bookmark> Bookmarks { get; set; } = [];
 }
 
 public sealed record Bookmark(string Name, string LocalPath, string RemotePath);
-
 public enum EntryKind { File, Directory, SymbolicLink, Other }
 
-public sealed record FileEntry(
-    string Path,
-    string Name,
-    EntryKind Kind,
-    long Length,
-    DateTimeOffset Modified,
-    uint? Mode = null,
-    string? LinkTarget = null)
+public sealed record FileEntry(string Path, string Name, EntryKind Kind, long Length,
+    DateTimeOffset Modified, uint? Mode = null, string? LinkTarget = null)
 {
     public bool IsDirectory => Kind == EntryKind.Directory;
 }
@@ -101,31 +96,25 @@ public static class PathSafety
     {
         "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"
     };
-
     public static void ValidateChildName(string name, bool windows)
     {
         // Whitespace-only names are legal on POSIX. Windows rules are applied below.
         if (string.IsNullOrEmpty(name) || name is "." or ".." || name.Contains('/') || name.Contains('\0'))
             throw new IOException("Invalid filename component.");
         if (!windows) return;
-
         if (name.Any(c => c < 32 || "<>:\"\\|?*".Contains(c)) || name.EndsWith(' ') || name.EndsWith('.'))
             throw new IOException("The filename is not valid on Windows.");
-
         var stem = name.Split('.', 2)[0];
         if (WindowsReservedNames.Contains(stem) || IsReservedComOrLpt(stem))
             throw new IOException($"Reserved Windows device filename: {name}");
     }
-
     private static bool IsReservedComOrLpt(string stem)
     {
         if (stem.Length != 4) return false;
         if (!stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) &&
-            !stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
-            return false;
+            !stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) return false;
         return stem[3] is >= '1' and <= '9' or '¹' or '²' or '³';
     }
-
     public static void ProtectRoot(string path, IFileSystem fileSystem)
     {
         if (string.IsNullOrWhiteSpace(path) || path is "." or ".." ||
@@ -138,9 +127,7 @@ public static class Completion
 {
     public static IReadOnlyList<string> Matching(IEnumerable<string> values, string prefix) => values
         .Where(v => v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        .Order(StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-
+        .Order(StringComparer.OrdinalIgnoreCase).ToArray();
     public static string LongestCommonPrefix(IEnumerable<string> values, string typed)
     {
         var candidates = Matching(values, typed);
@@ -150,8 +137,7 @@ public static class Completion
         foreach (var value in candidates.Skip(1))
         {
             var i = 0;
-            while (i < length && i < value.Length &&
-                   char.ToUpperInvariant(first[i]) == char.ToUpperInvariant(value[i])) i++;
+            while (i < length && i < value.Length && char.ToUpperInvariant(first[i]) == char.ToUpperInvariant(value[i])) i++;
             length = i;
         }
         return length > typed.Length ? first[..length] : typed;
