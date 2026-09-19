@@ -40,7 +40,7 @@ internal sealed class PathCompletingTextField(string initial,
         if (keyEvent.Key != Key.Tab) return base.ProcessKey(keyEvent);
         try
         {
-            var result = complete(Text.ToString());
+            var result = complete(Text?.ToString() ?? "");
             Text = result.Text;
             CursorPosition = Text.RuneCount;
             var shown = result.Candidates.Take(12).Select(Escape);
