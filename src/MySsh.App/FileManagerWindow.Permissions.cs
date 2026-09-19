@@ -14,6 +14,11 @@ internal sealed partial class FileManagerWindow
             return;
         }
         var entry = selected[0];
+        if (entry.Kind is not (EntryKind.File or EntryKind.Directory))
+        {
+            MessageBox.Query(70, 8, "Permissions", "Permissions cannot be changed on links or special files. Select the target explicitly.", "OK");
+            return;
+        }
         var fs = _activeLocal ? _local : _remote;
         if (entry.Mode is null || fs is not IPermissionFileSystem permissions)
         {
