@@ -60,8 +60,7 @@ internal static class FileManagerSession
                 }
                 finally
                 {
-                    try { settings.SaveState(); }
-                    finally { Program.ShutdownUi(); }
+                    UiSessionCleanup.Run(settings.SaveState, Program.ShutdownUi);
                 }
 
                 if (requestedEditor is not null)
