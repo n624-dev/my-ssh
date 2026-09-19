@@ -170,12 +170,5 @@ internal sealed partial class FileManagerWindow : Window
             : entries.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
     };
 
-    private void SaveBrowserState()
-    {
-        _state.LocalPath = _currentLocal;
-        _state.RemotePath = _currentRemote;
-        _settings.SaveState();
-    }
-
     private enum SortMode { Name, Size, Modified }
 }

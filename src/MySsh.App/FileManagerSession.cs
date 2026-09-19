@@ -55,8 +55,7 @@ internal static class FileManagerSession
                     reconnect = window.ReconnectRequested;
                     requestedEditor = window.RequestedEditor;
                     snapshot = window.CaptureInteractionState();
-                    state.LocalPath = snapshot.LocalPath;
-                    state.RemotePath = snapshot.RemotePath;
+                    window.CaptureBrowserState();
                 }
                 finally { UiSessionCleanup.Run(settings.SaveState, Program.ShutdownUi); }
 
