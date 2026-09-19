@@ -91,7 +91,7 @@ public sealed class TransferQueue : IAsyncDisposable
             if (_disposed || !_jobs.TryGetValue(id, out var job) || job.State != TransferState.Paused)
                 return false;
             job.PrepareForRun(resetProgressClock: false);
-            job.Message = "Queued for resume; partial data will be verified using a fresh session.";
+            job.Message = "Queued for resume; completed and partial data will be verified using a fresh session.";
             Start(job);
             return true;
         }
@@ -106,7 +106,11 @@ public sealed class TransferQueue : IAsyncDisposable
                 return false;
             job.PrepareForRun(resetProgressClock: true);
             if (conflict.HasValue) job.Options = job.Options with { Conflict = conflict.Value };
-            if (!string.IsNullOrWhiteSpace(destinationPath)) job.DestinationPath = destinationPath;
+            if (!string.IsNullOrWhiteSpace(destinationPath) && destinationPath != job.DestinationPath)
+            {
+                job.DestinationPath = destinationPath;
+                job.ResumeState = new();
+            }
             job.Message = "Queued for retry with a fresh transfer session.";
             Start(job);
             return true;
@@ -168,7 +172,7 @@ public sealed class TransferQueue : IAsyncDisposable
                 }
             });
             await _engine.CopyAsync(source, job.SourcePath, destination, job.DestinationPath,
-                job.Options, progress, job.Cancellation.Token).ConfigureAwait(false);
+                job.Options, progress, job.Cancellation.Token, job.ResumeState).ConfigureAwait(false);
             finalState = TransferState.Completed;
             lock (_sync) finalMessage = string.IsNullOrWhiteSpace(job.Message) ? "Completed" : job.Message;
         }
@@ -214,7 +218,7 @@ public sealed class TransferQueue : IAsyncDisposable
                     finalState = job.PauseRequested && !job.CancelRequested && !_disposed
                         ? TransferState.Paused : TransferState.Cancelled;
                     finalMessage = finalState == TransferState.Paused
-                        ? "Paused. Resume will verify partial data using a fresh session."
+                        ? "Paused. Resume will verify completed and partial data using a fresh session."
                         : "Cancelled. Partial data was retained for inspection or retry.";
                 }
                 job.State = finalState;
@@ -264,6 +268,7 @@ public sealed class TransferQueue : IAsyncDisposable
         public IFileSystem Destination { get; } = destination;
         public string DestinationPath { get; set; } = destinationPath;
         public TransferOptions Options { get; set; } = options;
+        public TransferResumeState ResumeState { get; set; } = new();
         public TransferState State { get; set; } = TransferState.Queued;
         public Task RunTask { get; set; } = Task.CompletedTask;
         public CancellationTokenSource Cancellation { get; private set; } = new();
