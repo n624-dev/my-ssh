@@ -47,7 +47,7 @@ internal sealed partial class SftpSession
     private readonly Process? _process;
     private readonly Stream _input;
     private readonly Stream _output;
-    private readonly Dictionary<string, string> _extensions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, byte[]> _extensions = new(StringComparer.Ordinal);
 
     private SftpSession(Process process)
         : this(process.StandardInput.BaseStream, process.StandardOutput.BaseStream)
@@ -114,7 +114,7 @@ internal sealed partial class SftpSession
         while (!reader.End)
         {
             var name = reader.ReadString();
-            var value = reader.ReadString();
+            var value = reader.ReadBlob();
             _extensions[name] = value;
         }
     }
@@ -246,7 +246,7 @@ internal sealed partial class SftpSession
         Packet packet;
         if (replace)
         {
-            if (!_extensions.ContainsKey("posix-rename@openssh.com"))
+            if (!_extensions.TryGetValue("posix-rename@openssh.com", out var version) || !version.AsSpan().SequenceEqual("1"u8))
                 throw new IOException("The server does not support atomic replacement (posix-rename@openssh.com).");
             packet = await RequestAsync(FxpExtended, writer =>
             {
