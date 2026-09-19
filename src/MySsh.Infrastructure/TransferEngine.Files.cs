@@ -34,33 +34,38 @@ public sealed partial class TransferEngine
         else if (partialEntry is not null)
             throw new IOException($"Cannot resume because the partial destination is not a compatible regular file: {partial}");
 
-        var output = await destination.OpenWriteAsync(partial, partialEntry is null, ct).ConfigureAwait(false);
-        try
+        // A full stage may already have read-only metadata after a failed rename.
+        // Verify it below and retry commit without reopening it for writing.
+        // Missing empty files still need creation and an acknowledged CLOSE.
+        if (partialEntry is null || offset < sourceEntry.Length)
         {
-            output.Seek(offset, SeekOrigin.Begin);
-            var buffer = new byte[BufferSize];
-            // The plan's size is the bound. A growing source must not keep this
-            // read-to-EOF operation running forever or inflate progress past 100%.
-            while (offset < sourceEntry.Length)
+            var output = await destination.OpenWriteAsync(partial, partialEntry is null, ct).ConfigureAwait(false);
+            try
             {
-                var wanted = (int)Math.Min(buffer.Length, sourceEntry.Length - offset);
-                var count = await input.ReadAsync(buffer.AsMemory(0, wanted), ct).ConfigureAwait(false);
-                if (count == 0) throw new IOException("The source became shorter during the transfer.");
-                await output.WriteAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
-                offset += count;
-                reportFileBytes(offset);
+                output.Seek(offset, SeekOrigin.Begin);
+                var buffer = new byte[BufferSize];
+                // Bound reads by the planned size even if the source grows.
+                while (offset < sourceEntry.Length)
+                {
+                    var wanted = (int)Math.Min(buffer.Length, sourceEntry.Length - offset);
+                    var count = await input.ReadAsync(buffer.AsMemory(0, wanted), ct).ConfigureAwait(false);
+                    if (count == 0) throw new IOException("The source became shorter during the transfer.");
+                    await output.WriteAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
+                    offset += count;
+                    reportFileBytes(offset);
+                }
+                if (await input.ReadAsync(buffer.AsMemory(0, 1), ct).ConfigureAwait(false) != 0)
+                    throw new IOException("The source grew during the transfer.");
+                await output.FlushAsync(ct).ConfigureAwait(false);
             }
-            if (await input.ReadAsync(buffer.AsMemory(0, 1), ct).ConfigureAwait(false) != 0)
-                throw new IOException("The source grew during the transfer.");
-            await output.FlushAsync(ct).ConfigureAwait(false);
+            catch
+            {
+                try { await output.DisposeAsync().ConfigureAwait(false); } catch { }
+                throw;
+            }
+            // Successful CLOSE is mandatory before any verification/commit (#1).
+            await output.DisposeAsync().ConfigureAwait(false);
         }
-        catch
-        {
-            try { await output.DisposeAsync().ConfigureAwait(false); } catch { }
-            throw;
-        }
-        // Successful CLOSE is mandatory before any verification/commit (#1).
-        await output.DisposeAsync().ConfigureAwait(false);
         var finalPartial = await destination.StatAsync(partial, ct).ConfigureAwait(false)
             ?? throw new IOException("The transferred partial file disappeared before commit.");
         if (finalPartial.Kind != EntryKind.File || finalPartial.Length != sourceEntry.Length)
