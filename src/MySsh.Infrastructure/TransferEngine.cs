@@ -117,6 +117,9 @@ public sealed partial class TransferEngine
                         await resume.VerifyAsync(source, item.Source, destination, item.Destination,
                             ConflictAction.Ask, cancellationToken).ConfigureAwait(false);
                 }
+                // Persist intent before the first destructive step. After a crash,
+                // interrupted source cleanup requires inspection, never blind replay.
+                resume?.BeginSourceCleanup();
                 // Delete only the copied plan, never newly created source entries.
                 foreach (var item in plan.AsEnumerable().Reverse())
                 {
