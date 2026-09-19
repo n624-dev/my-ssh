@@ -37,7 +37,7 @@ internal sealed class Issue36Tests : IRegressionCase
         {
             using var window = new FileManagerWindow(new Connection("keys.test", "user"), local, local,
                 new BrowserState { LocalPath = root.Path, RemotePath = root.Path }, settings, queue);
-            var status = window.Subviews.OfType<StatusBar>().Single();
+            var status = Descendants(window).OfType<StatusBar>().Single();
             var copy = status.Items.Single(x => x.Title.ToString() == "~F8~ Copy");
             RegressionCases.Check(copy.Shortcut == Key.F8 && status.Items.All(x => x.Shortcut != Key.F5),
                 "The live window is still using the old copy key.");
@@ -45,6 +45,13 @@ internal sealed class Issue36Tests : IRegressionCase
         }
         finally { MySsh.App.Program.ShutdownUi(); queue.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         return Task.CompletedTask;
+    }
+
+    private static IEnumerable<View> Descendants(View root)
+    {
+        yield return root;
+        foreach (var child in root.Subviews)
+            foreach (var view in Descendants(child)) yield return view;
     }
 
     private static void ExpectInvalid(IReadOnlyDictionary<string, string> configured)
