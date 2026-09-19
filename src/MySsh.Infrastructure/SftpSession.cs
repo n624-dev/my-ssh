@@ -179,7 +179,11 @@ internal sealed partial class SftpSession
         {
             WriteString(writer, path);
             WriteUInt32(writer, flags);
-            WriteUInt32(writer, 0);
+            // A stage must be private from its first byte, not just after the
+            // transfer's final metadata update. Do not chmod an existing file.
+            var creating = (flags & OpenCreate) != 0;
+            WriteUInt32(writer, creating ? AttrPermissions : 0);
+            if (creating) WriteUInt32(writer, 0x180); // 0600
         }, cancellationToken).ConfigureAwait(false);
         return ParseHandle(packet);
     }

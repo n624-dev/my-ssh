@@ -27,16 +27,16 @@ public sealed class EditSession
         var original = await fileSystem.StatAsync(path, ct).ConfigureAwait(false)
             ?? throw new FileNotFoundException(path);
         if (original.Kind != EntryKind.File) throw new IOException("Only regular files can be edited.");
-        CreatePrivateDirectory(draftsRoot);
+        PrivateStorage.EnsureDirectory(draftsRoot);
         var directory = Path.Combine(Path.GetFullPath(draftsRoot), Guid.NewGuid().ToString("N"));
-        CreatePrivateDirectory(directory);
+        PrivateStorage.EnsureDirectory(directory);
         var extension = Path.GetExtension(original.Name);
         if (extension.Length == 0 || extension.Length > 16 || extension.Any(c => Path.GetInvalidFileNameChars().Contains(c)))
             extension = ".txt";
         var draft = new EditSession(fileSystem, original, directory, Path.Combine(directory, "content" + extension));
         try
         {
-            using (var manifest = CreatePrivateFile(Path.Combine(directory, "recovery.json")))
+            using (var manifest = PrivateStorage.CreateFile(Path.Combine(directory, "recovery.json")))
             {
                 JsonSerializer.Serialize(manifest, new
                 {
@@ -71,7 +71,7 @@ public sealed class EditSession
         var pending = Path.Combine(DraftDirectory, "save-" + Guid.NewGuid().ToString("N"));
         try
         {
-            using (var output = CreatePrivateFile(pending))
+            using (var output = PrivateStorage.CreateFile(pending))
             {
                 var bytes = new UTF8Encoding(false).GetBytes(text);
                 output.Write(bytes);
@@ -111,20 +111,4 @@ public sealed class EditSession
     }
 
     public void Discard() => Directory.Delete(DraftDirectory, true);
-
-    private static void CreatePrivateDirectory(string path)
-    {
-        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(path);
-        else Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-    }
-
-    private static FileStream CreatePrivateFile(string path)
-    {
-        var options = new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None
-        };
-        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        return new FileStream(path, options);
-    }
 }
