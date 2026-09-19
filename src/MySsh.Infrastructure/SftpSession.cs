@@ -5,7 +5,7 @@ using MySsh.Core;
 
 namespace MySsh.Infrastructure;
 
-internal sealed class SftpSession : IAsyncDisposable
+internal sealed partial class SftpSession
 {
     private const byte FxpInit = 1;
     private const byte FxpVersion = 2;
@@ -47,10 +47,7 @@ internal sealed class SftpSession : IAsyncDisposable
     private readonly Process? _process;
     private readonly Stream _input;
     private readonly Stream _output;
-    private readonly SemaphoreSlim _requestLock = new(1, 1);
     private readonly Dictionary<string, string> _extensions = new(StringComparer.Ordinal);
-    private uint _requestId;
-    private bool _disposed;
 
     private SftpSession(Process process)
         : this(process.StandardInput.BaseStream, process.StandardOutput.BaseStream)
@@ -165,7 +162,9 @@ internal sealed class SftpSession : IAsyncDisposable
         }
         finally
         {
-            await CloseAsync(handle, CancellationToken.None).ConfigureAwait(false);
+            // An interrupted request invalidates the entire transport. Its
+            // cleanup must not issue another packet or hide the original error.
+            if (!IsFaulted) await CloseAsync(handle, CancellationToken.None).ConfigureAwait(false);
         }
         return result;
     }
@@ -292,71 +291,6 @@ internal sealed class SftpSession : IAsyncDisposable
         ExpectOk(packet);
     }
 
-    private async Task<Packet> RequestAsync(byte type, Action<MemoryStream> write,
-        CancellationToken cancellationToken, bool allowStatus = false)
-    {
-        await _requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var id = unchecked(++_requestId);
-            using var payload = new MemoryStream();
-            WriteUInt32(payload, id);
-            write(payload);
-            await SendPacketAsync(type, payload.ToArray(), cancellationToken).ConfigureAwait(false);
-            var packet = await ReadPacketAsync(cancellationToken).ConfigureAwait(false);
-            var reader = new PacketReader(packet.Payload);
-            var responseId = reader.ReadUInt32();
-            if (responseId != id)
-                throw new IOException($"SFTP response id mismatch: expected {id}, received {responseId}.");
-            var body = reader.ReadRemaining();
-            var response = new Packet(packet.Type, body);
-            if (response.Type == FxpStatus && !allowStatus)
-            {
-                var status = ParseStatus(response.Payload);
-                if (status.Code != 0) ThrowStatus(status);
-            }
-            return response;
-        }
-        finally
-        {
-            _requestLock.Release();
-        }
-    }
-
-    private async Task SendPacketAsync(byte type, byte[] payload, CancellationToken cancellationToken)
-    {
-        var length = checked(1 + payload.Length);
-        var header = new byte[5];
-        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), checked((uint)length));
-        header[4] = type;
-        await _input.WriteAsync(header, cancellationToken).ConfigureAwait(false);
-        if (payload.Length > 0) await _input.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-        await _input.FlushAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<Packet> ReadPacketAsync(CancellationToken cancellationToken)
-    {
-        var lengthBytes = new byte[4];
-        await ReadExactlyAsync(_output, lengthBytes, cancellationToken).ConfigureAwait(false);
-        var length = BinaryPrimitives.ReadUInt32BigEndian(lengthBytes);
-        if (length is < 1 or > 64 * 1024 * 1024)
-            throw new IOException($"Invalid SFTP packet length {length}.");
-        var packet = new byte[checked((int)length)];
-        await ReadExactlyAsync(_output, packet, cancellationToken).ConfigureAwait(false);
-        return new Packet(packet[0], packet[1..]);
-    }
-
-    private static async Task ReadExactlyAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
-    {
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var count = await stream.ReadAsync(buffer[offset..], cancellationToken).ConfigureAwait(false);
-            if (count == 0) throw new EndOfStreamException("SSH SFTP subsystem closed unexpectedly.");
-            offset += count;
-        }
-    }
-
     private static byte[] ParseHandle(Packet packet)
     {
         if (packet.Type != FxpHandle) throw Unexpected(packet, "HANDLE");
@@ -444,28 +378,6 @@ internal sealed class SftpSession : IAsyncDisposable
     {
         WriteUInt32(stream, checked((uint)value.Length));
         stream.Write(value);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        try { _input.Close(); } catch { }
-        if (_process is not null)
-        {
-            try
-            {
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-            }
-            catch
-            {
-                try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { }
-            }
-            _process.Dispose();
-        }
-        try { _output.Close(); } catch { }
-        _requestLock.Dispose();
     }
 
     private readonly record struct Packet(byte Type, byte[] Payload);
