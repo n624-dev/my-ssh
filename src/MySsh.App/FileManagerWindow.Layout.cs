@@ -33,13 +33,8 @@ internal sealed partial class FileManagerWindow : Window
     private bool _sortDescending;
     private bool _activeLocal = true;
 
-    public FileManagerWindow(
-        Connection connection,
-        IFileSystem local,
-        IFileSystem remote,
-        BrowserState state,
-        SettingsStore settings,
-        TransferQueue transfers)
+    public FileManagerWindow(Connection connection, IFileSystem local, IFileSystem remote,
+        BrowserState state, SettingsStore settings, TransferQueue transfers)
         : base($"File Transfer: {connection.Key}")
     {
         _connection = connection;
@@ -49,19 +44,15 @@ internal sealed partial class FileManagerWindow : Window
         _settings = settings;
         _transfers = transfers;
         _currentLocal = string.IsNullOrWhiteSpace(state.LocalPath)
-            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-            : state.LocalPath;
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : state.LocalPath;
         _currentRemote = string.IsNullOrWhiteSpace(state.RemotePath) ? "." : state.RemotePath;
-
         X = 0;
         Y = 0;
         Width = Dim.Fill();
         Height = Dim.Fill();
-
         ConfigureLayout();
         ConfigureEvents();
         ReloadAll();
-
         Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(300), _ =>
         {
             RefreshQueue();
@@ -73,19 +64,12 @@ internal sealed partial class FileManagerWindow : Window
     {
         var localFrame = new FrameView("LOCAL")
         {
-            X = 0,
-            Y = 0,
-            Width = Dim.Percent(50),
-            Height = Dim.Fill(9)
+            X = 0, Y = 0, Width = Dim.Percent(50), Height = Dim.Fill(9)
         };
         var remoteFrame = new FrameView("REMOTE")
         {
-            X = Pos.Right(localFrame),
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill(9)
+            X = Pos.Right(localFrame), Y = 0, Width = Dim.Fill(), Height = Dim.Fill(9)
         };
-
         _localPath.X = 1;
         _localPath.Y = 0;
         _localPath.Width = Dim.Fill(1);
@@ -94,7 +78,6 @@ internal sealed partial class FileManagerWindow : Window
         _remotePath.Y = 0;
         _remotePath.Width = Dim.Fill(1);
         _remotePath.Height = 1;
-
         ConfigureList(_localList);
         ConfigureList(_remoteList);
         _localList.X = 0;
@@ -105,28 +88,21 @@ internal sealed partial class FileManagerWindow : Window
         _remoteList.Y = 1;
         _remoteList.Width = Dim.Fill();
         _remoteList.Height = Dim.Fill();
-
         localFrame.Add(_localPath, _localList);
         remoteFrame.Add(_remotePath, _remoteList);
-
         var queueFrame = new FrameView("Transfers")
         {
-            X = 0,
-            Y = Pos.Bottom(localFrame),
-            Width = Dim.Fill(),
-            Height = 6
+            X = 0, Y = Pos.Bottom(localFrame), Width = Dim.Fill(), Height = 6
         };
         _queueList.X = 0;
         _queueList.Y = 0;
         _queueList.Width = Dim.Fill();
         _queueList.Height = Dim.Fill();
         queueFrame.Add(_queueList);
-
         _message.X = 0;
         _message.Y = Pos.Bottom(queueFrame);
         _message.Width = Dim.Fill();
         _message.Height = 1;
-
         var status = new StatusBar([
             new StatusItem(KeyFor("help", Key.F1), "~F1~ Help", ShowHelp),
             new StatusItem(KeyFor("rename", Key.F2), "~F2~ Rename", RenameSelected),
@@ -137,15 +113,13 @@ internal sealed partial class FileManagerWindow : Window
             new StatusItem(KeyFor("delete", Key.DeleteChar), "~Del~ Delete", DeleteSelected),
             new StatusItem(Key.Esc, "~Esc~ Back", () => Application.RequestStop())
         ]);
-
         Add(localFrame, remoteFrame, queueFrame, _message, status);
     }
 
     private Key KeyFor(string action, Key fallback)
     {
         if (_settings.Config.Keys.TryGetValue(action, out var configured) &&
-            Enum.TryParse<Key>(configured, ignoreCase: true, out var parsed))
-            return parsed;
+            Enum.TryParse<Key>(configured, ignoreCase: true, out var parsed)) return parsed;
         return fallback;
     }
 
@@ -168,16 +142,18 @@ internal sealed partial class FileManagerWindow : Window
     {
         try
         {
-            _currentLocal = _local.CanonicalAsync(_currentLocal, CancellationToken.None).GetAwaiter().GetResult();
-            _currentRemote = _remote.CanonicalAsync(_currentRemote, CancellationToken.None).GetAwaiter().GetResult();
+            var localPath = _currentLocal;
+            var remotePath = _currentRemote;
+            var paths = UiFileOperation.Run("Resolve directories", async ct => (
+                Local: await _local.CanonicalAsync(localPath, ct).ConfigureAwait(false),
+                Remote: await _remote.CanonicalAsync(remotePath, ct).ConfigureAwait(false)));
+            _currentLocal = paths.Local;
+            _currentRemote = paths.Remote;
             ReloadPane(localSide: true);
             ReloadPane(localSide: false);
             SaveBrowserState();
         }
-        catch (Exception ex)
-        {
-            _message.Text = ex.Message;
-        }
+        catch (Exception ex) { _message.Text = Safe(ex.Message); }
     }
 
     private void ReloadPane(bool localSide)
@@ -186,38 +162,25 @@ internal sealed partial class FileManagerWindow : Window
         var path = localSide ? _currentLocal : _currentRemote;
         var filter = localSide ? _localFilter : _remoteFilter;
         var list = localSide ? _localList : _remoteList;
-
-        var entries = fs.ListAsync(path, CancellationToken.None).GetAwaiter().GetResult()
-            .Where(x => _state.ShowHidden || !x.Name.StartsWith(".", StringComparison.Ordinal))
-            .Where(x => string.IsNullOrWhiteSpace(filter) ||
-                        x.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
-
+        var result = UiFileOperation.Run(localSide ? "Read local directory" : "Read remote directory",
+            ct => fs.ListAsync(path, ct));
+        var entries = result.Where(x => _state.ShowHidden || !x.Name.StartsWith(".", StringComparison.Ordinal))
+            .Where(x => string.IsNullOrWhiteSpace(filter) || x.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
         var rows = new List<BrowserRow> { BrowserRow.Parent };
         rows.AddRange(SortEntries(entries).Select(x => new BrowserRow(x)));
         list.SetSource((IList)rows);
-
         var label = Safe(path);
         if (!string.IsNullOrWhiteSpace(filter)) label += $"  [filter: {Safe(filter)}]";
         label += $"  [sort: {_sortMode}{(_sortDescending ? " desc" : "")}]";
-
-        if (localSide)
-        {
-            _localRows = rows;
-            _localPath.Text = label;
-        }
-        else
-        {
-            _remoteRows = rows;
-            _remotePath.Text = label;
-        }
+        if (localSide) { _localRows = rows; _localPath.Text = label; }
+        else { _remoteRows = rows; _remotePath.Text = label; }
     }
 
     private IEnumerable<FileEntry> SortEntries(IEnumerable<FileEntry> entries)
     {
         var materialized = entries.ToArray();
-        var directories = SortGroup(materialized.Where(x => x.Kind == EntryKind.Directory));
-        var others = SortGroup(materialized.Where(x => x.Kind != EntryKind.Directory));
-        return directories.Concat(others);
+        return SortGroup(materialized.Where(x => x.Kind == EntryKind.Directory))
+            .Concat(SortGroup(materialized.Where(x => x.Kind != EntryKind.Directory)));
     }
 
     private IEnumerable<FileEntry> SortGroup(IEnumerable<FileEntry> entries) => _sortMode switch
@@ -228,8 +191,7 @@ internal sealed partial class FileManagerWindow : Window
         SortMode.Modified => _sortDescending
             ? entries.OrderByDescending(x => x.Modified).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             : entries.OrderBy(x => x.Modified).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase),
-        _ => _sortDescending
-            ? entries.OrderByDescending(x => x.Name, StringComparer.OrdinalIgnoreCase)
+        _ => _sortDescending ? entries.OrderByDescending(x => x.Name, StringComparer.OrdinalIgnoreCase)
             : entries.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
     };
 
