@@ -13,14 +13,12 @@ internal sealed partial class FileManagerWindow : Window
     private readonly BrowserState _state;
     private readonly SettingsStore _settings;
     private readonly TransferQueue _transfers;
-
     private readonly Label _localPath = new("");
     private readonly Label _remotePath = new("");
     private readonly ListView _localList = new();
     private readonly ListView _remoteList = new();
     private readonly ListView _queueList = new();
     private readonly Label _message = new("");
-
     private List<BrowserRow> _localRows = [];
     private List<BrowserRow> _remoteRows = [];
     private List<TransferJobSnapshot> _queueRows = [];
@@ -140,40 +138,17 @@ internal sealed partial class FileManagerWindow : Window
 
     private void ReloadAll()
     {
-        try
-        {
-            var localPath = _currentLocal;
-            var remotePath = _currentRemote;
-            var paths = UiFileOperation.Run("Resolve directories", async ct => (
-                Local: await _local.CanonicalAsync(localPath, ct).ConfigureAwait(false),
-                Remote: await _remote.CanonicalAsync(remotePath, ct).ConfigureAwait(false)));
-            _currentLocal = paths.Local;
-            _currentRemote = paths.Remote;
-            ReloadPane(localSide: true);
-            ReloadPane(localSide: false);
-            SaveBrowserState();
-        }
+        try { NavigateBoth(_currentLocal, _currentRemote); }
         catch (Exception ex) { _message.Text = Safe(ex.Message); }
     }
 
     private void ReloadPane(bool localSide)
     {
-        var fs = localSide ? _local : _remote;
         var path = localSide ? _currentLocal : _currentRemote;
-        var filter = localSide ? _localFilter : _remoteFilter;
-        var list = localSide ? _localList : _remoteList;
+        var fs = localSide ? _local : _remote;
         var result = UiFileOperation.Run(localSide ? "Read local directory" : "Read remote directory",
             ct => fs.ListAsync(path, ct));
-        var entries = result.Where(x => _state.ShowHidden || !x.Name.StartsWith(".", StringComparison.Ordinal))
-            .Where(x => string.IsNullOrWhiteSpace(filter) || x.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
-        var rows = new List<BrowserRow> { BrowserRow.Parent };
-        rows.AddRange(SortEntries(entries).Select(x => new BrowserRow(x)));
-        list.SetSource((IList)rows);
-        var label = Safe(path);
-        if (!string.IsNullOrWhiteSpace(filter)) label += $"  [filter: {Safe(filter)}]";
-        label += $"  [sort: {_sortMode}{(_sortDescending ? " desc" : "")}]";
-        if (localSide) { _localRows = rows; _localPath.Text = label; }
-        else { _remoteRows = rows; _remotePath.Text = label; }
+        ApplyPane(localSide, new PaneContents(path, result));
     }
 
     private IEnumerable<FileEntry> SortEntries(IEnumerable<FileEntry> entries)
@@ -200,12 +175,6 @@ internal sealed partial class FileManagerWindow : Window
         _state.LocalPath = _currentLocal;
         _state.RemotePath = _currentRemote;
         _settings.SaveState();
-    }
-
-    private void SetCurrent(bool localSide, string value)
-    {
-        if (localSide) _currentLocal = value;
-        else _currentRemote = value;
     }
 
     private enum SortMode { Name, Size, Modified }

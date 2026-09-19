@@ -18,20 +18,8 @@ internal sealed partial class FileManagerWindow
         var current = localSide ? _currentLocal : _currentRemote;
         try
         {
-            if (row.IsParent)
-            {
-                SetCurrent(localSide, fs.Parent(current));
-                ReloadPane(localSide);
-                SaveBrowserState();
-                return;
-            }
-            if (row.Entry?.Kind == EntryKind.Directory)
-            {
-                SetCurrent(localSide, row.Entry.Path);
-                ReloadPane(localSide);
-                SaveBrowserState();
-                return;
-            }
+            if (row.IsParent) { NavigatePane(localSide, fs.Parent(current)); return; }
+            if (row.Entry?.Kind == EntryKind.Directory) { NavigatePane(localSide, row.Entry.Path); return; }
             if (row.Entry is not null) Preview(row.Entry, fs);
         }
         catch (Exception ex) { ShowOperationError("Open", ex); }
@@ -236,20 +224,7 @@ internal sealed partial class FileManagerWindow
         var current = _activeLocal ? _currentLocal : _currentRemote;
         var path = Prompt("Go to Path", "Path", current);
         if (string.IsNullOrWhiteSpace(path)) return;
-        try
-        {
-            var fs = _activeLocal ? _local : _remote;
-            var canonical = UiFileOperation.Run("Resolve path", async ct =>
-            {
-                var resolved = await fs.CanonicalAsync(path, ct).ConfigureAwait(false);
-                if (await fs.StatAsync(resolved, ct).ConfigureAwait(false) is not { Kind: EntryKind.Directory })
-                    throw new IOException("Path is not a directory.");
-                return resolved;
-            });
-            SetCurrent(_activeLocal, canonical);
-            ReloadPane(_activeLocal);
-            SaveBrowserState();
-        }
+        try { NavigatePane(_activeLocal, path); }
         catch (Exception ex) { ShowOperationError("Go to path", ex); }
     }
 
@@ -262,10 +237,7 @@ internal sealed partial class FileManagerWindow
             return;
         }
         var selected = Choose("Local Roots", roots.Cast<object>().ToList());
-        if (selected < 0) return;
-        _currentLocal = roots[selected];
-        ReloadPane(true);
-        SaveBrowserState();
+        if (selected >= 0) NavigatePane(true, roots[selected]);
     }
 
     private static List<string> ReadLocalRoots()
@@ -336,8 +308,6 @@ internal sealed partial class FileManagerWindow
         var items = _state.Bookmarks.Select(x => (object)$"{x.Name}  |  {Safe(x.LocalPath)}  |  {Safe(x.RemotePath)}").ToList();
         var selected = Choose("Bookmarks", items);
         if (selected < 0) return;
-        _currentLocal = _state.Bookmarks[selected].LocalPath;
-        _currentRemote = _state.Bookmarks[selected].RemotePath;
-        ReloadAll();
+        NavigateBoth(_state.Bookmarks[selected].LocalPath, _state.Bookmarks[selected].RemotePath);
     }
 }
