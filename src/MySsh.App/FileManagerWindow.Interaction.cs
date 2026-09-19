@@ -51,7 +51,6 @@ internal sealed partial class FileManagerWindow
         _remoteFilter = snapshot.RemoteFilter;
         _sortMode = (SortMode)snapshot.Sort;
         _sortDescending = snapshot.Descending;
-        _activeLocal = snapshot.ActiveLocal;
         ReloadAll();
         foreach (var job in _transfers.Snapshot())
             if (job.State is TransferState.Completed or TransferState.Partial)
@@ -64,8 +63,11 @@ internal sealed partial class FileManagerWindow
             var index = _queueRows.FindIndex(job => job.Id == id);
             if (index >= 0) _queueList.SelectedItem = index;
         }
+        // Closing a progress dialog can send Enter to the previously focused
+        // list. Restore the requested pane only after all I/O dialogs are done.
+        _activeLocal = snapshot.ActiveLocal;
         if (snapshot.QueueFocused) _queueList.SetFocus();
-        else if (_activeLocal) _localList.SetFocus();
+        else if (snapshot.ActiveLocal) _localList.SetFocus();
         else _remoteList.SetFocus();
     }
 
