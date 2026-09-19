@@ -146,6 +146,7 @@ internal sealed partial class SftpSession
         var open = await RequestAsync(FxpOpendir, writer => WriteString(writer, path), cancellationToken).ConfigureAwait(false);
         var handle = ParseHandle(open);
         var result = new List<SftpName>();
+        Exception? enumerationError = null;
         try
         {
             while (true)
@@ -160,11 +161,14 @@ internal sealed partial class SftpSession
                 result.AddRange(ParseNames(packet));
             }
         }
+        catch (Exception ex)
+        {
+            enumerationError = ex;
+            throw;
+        }
         finally
         {
-            // An interrupted request invalidates the entire transport. Its
-            // cleanup must not issue another packet or hide the original error.
-            if (!IsFaulted) await CloseAsync(handle, CancellationToken.None).ConfigureAwait(false);
+            await CloseDirectoryAsync(handle, enumerationError).ConfigureAwait(false);
         }
         return result;
     }
