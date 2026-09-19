@@ -24,8 +24,9 @@ internal sealed class Issue22Tests : IRegressionCase
         using var root = new TestDirectory();
         using var settings = new SettingsStore(root.File("settings"));
         var stateFile = Path.Combine(settings.DirectoryPath, "state.json");
+        var originalState = File.ReadAllText(stateFile);
         File.Delete(stateFile);
-        Directory.CreateDirectory(stateFile); // Atomic file replacement must fail on both OS families.
+        Directory.CreateDirectory(stateFile); // State persistence must fail on both OS families.
         Application.Init(new FakeDriver());
         try
         {
@@ -39,6 +40,9 @@ internal sealed class Issue22Tests : IRegressionCase
         }
         finally { if (Application.Driver is not null) MySsh.App.Program.ShutdownUi(); }
         Directory.Delete(stateFile);
+        // Preserve SettingsStore's independent lost-update protection: a missing
+        // baseline is not silently recreated by the old in-memory instance.
+        File.WriteAllText(stateFile, originalState);
         Application.Init(new FakeDriver());
         try
         {
