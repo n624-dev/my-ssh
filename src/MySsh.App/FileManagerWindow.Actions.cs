@@ -230,7 +230,7 @@ internal sealed partial class FileManagerWindow
         };
 
         if (_activeLocal) actions.Add(("Choose local root", ChooseLocalRoot));
-        else actions.Add(("Reconnect remote", ReconnectRemote));
+        else actions.Add(("Reconnect remote", RequestRemoteReconnect));
 
         var selected = Choose("Actions", actions.Select(x => (object)x.Name).ToList());
         if (selected >= 0) actions[selected].Run();
@@ -333,29 +333,6 @@ internal sealed partial class FileManagerWindow
         _currentLocal = roots[selected];
         ReloadPane(localSide: true);
         SaveBrowserState();
-    }
-
-    private void ReconnectRemote()
-    {
-        if (_remote is not SftpFileSystem remote)
-        {
-            MessageBox.Query(55, 7, "Reconnect", "This remote backend cannot reconnect.", "OK");
-            return;
-        }
-
-        try
-        {
-            _message.Text = "Reconnecting remote SFTP session...";
-            remote.ReconnectAsync(CancellationToken.None).GetAwaiter().GetResult();
-            _currentRemote = remote.CanonicalAsync(_currentRemote, CancellationToken.None)
-                .GetAwaiter().GetResult();
-            ReloadPane(localSide: false);
-            _message.Text = "Remote SFTP session reconnected.";
-        }
-        catch (Exception ex)
-        {
-            MessageBox.ErrorQuery(75, 9, "Reconnect", ex.Message, "OK");
-        }
     }
 
     private void ChangePermissions()
