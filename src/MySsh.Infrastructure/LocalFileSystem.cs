@@ -75,20 +75,14 @@ public sealed class LocalFileSystem : IFileSystem, IDisposable
     public async Task<Stream> OpenWriteAsync(string path, bool createNew, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!createNew && await StatAsync(path, cancellationToken).ConfigureAwait(false) is not { Kind: EntryKind.File })
+        if (createNew) return PrivateStorage.CreateFile(path, FileOptions.Asynchronous);
+        if (await StatAsync(path, cancellationToken).ConfigureAwait(false) is not { Kind: EntryKind.File })
             throw new IOException("The partial file is missing or is not a regular file.");
-
-        var options = new FileStreamOptions
+        return new FileStream(path, new FileStreamOptions
         {
-            Mode = createNew ? FileMode.CreateNew : FileMode.Open,
-            Access = FileAccess.ReadWrite,
-            Share = FileShare.None,
-            BufferSize = 64 * 1024,
-            Options = FileOptions.Asynchronous
-        };
-        if (!OperatingSystem.IsWindows() && createNew)
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        return new FileStream(path, options);
+            Mode = FileMode.Open, Access = FileAccess.ReadWrite, Share = FileShare.None,
+            BufferSize = 64 * 1024, Options = FileOptions.Asynchronous
+        });
     }
 
     public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken)
