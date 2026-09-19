@@ -35,8 +35,7 @@ internal sealed partial class FileManagerWindow
             var destinationDirectory = _activeLocal ? _currentRemote : _currentLocal;
             var rows = SelectedRows(_activeLocal);
             if (rows.Count == 0) return;
-            var plan = TransferSelectionPlanner.Prepare(destination, destinationDirectory,
-                rows, ResolveInvalidTransferName);
+            var plan = TransferSelectionPlanner.Prepare(destination, destinationDirectory, rows, ResolveInvalidTransferName);
             if (plan.Cancelled)
             {
                 _message.Text = "Selection cancelled; no new transfers were queued.";
@@ -259,34 +258,6 @@ internal sealed partial class FileManagerWindow
             if (!string.IsNullOrWhiteSpace(home) && home != "/") roots.Add(home);
         }
         return roots;
-    }
-
-    private void ChangePermissions()
-    {
-        var selected = SelectedRows(_activeLocal);
-        if (selected.Count != 1)
-        {
-            MessageBox.Query(60, 7, "Permissions", "Select exactly one entry.", "OK");
-            return;
-        }
-        var entry = selected[0];
-        if (entry.Mode is null)
-        {
-            MessageBox.Query(70, 8, "Permissions", "POSIX permission bits are not available for this entry on this filesystem.", "OK");
-            return;
-        }
-        var value = Prompt("Permissions", "Octal mode (000-777)", Convert.ToString(entry.Mode.Value & 0x1FF, 8).PadLeft(3, '0'));
-        if (value is null) return;
-        try
-        {
-            if (value.Length != 3 || value.Any(c => c is < '0' or > '7'))
-                throw new IOException("Permission mode must be exactly three octal digits from 000 to 777.");
-            var mode = Convert.ToUInt32(value, 8);
-            var fs = _activeLocal ? _local : _remote;
-            UiFileOperation.Run("Change permissions", ct => fs.SetMetadataAsync(entry.Path, entry.Modified, mode, ct));
-            ReloadPane(_activeLocal);
-        }
-        catch (Exception ex) { ShowOperationError("Permissions", ex); }
     }
 
     private void AddBookmark()

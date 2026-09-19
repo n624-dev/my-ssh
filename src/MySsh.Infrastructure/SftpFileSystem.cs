@@ -2,7 +2,7 @@ using MySsh.Core;
 
 namespace MySsh.Infrastructure;
 
-public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
+public sealed partial class SftpFileSystem : IFileSystem, IFileSystemNamespace
 {
     private readonly Connection _connection;
     private readonly IConnectionInteraction? _interaction;
@@ -50,10 +50,7 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             _session = replacement;
             await old.DisposeAsync().ConfigureAwait(false);
         }
-        finally
-        {
-            _lifecycle.Release();
-        }
+        finally { _lifecycle.Release(); }
     }
 
     public string Join(string directory, string name)
@@ -90,14 +87,8 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             try { target = await session.ReadLinkAsync(path, cancellationToken).ConfigureAwait(false); }
             catch (IOException) { }
         }
-        return new FileEntry(
-            path,
-            Name(path),
-            kind,
-            checked((long)(attributes.Value.Size ?? 0)),
-            attributes.Value.Modified ?? DateTimeOffset.UnixEpoch,
-            attributes.Value.Mode,
-            target);
+        return new FileEntry(path, Name(path), kind, checked((long)(attributes.Value.Size ?? 0)),
+            attributes.Value.Modified ?? DateTimeOffset.UnixEpoch, attributes.Value.Mode, target);
     }
 
     public async Task<IReadOnlyList<FileEntry>> ListAsync(string path, CancellationToken cancellationToken)
@@ -117,14 +108,8 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
                 try { linkTarget = await session.ReadLinkAsync(itemPath, cancellationToken).ConfigureAwait(false); }
                 catch (IOException) { }
             }
-            result.Add(new FileEntry(
-                itemPath,
-                item.Name,
-                kind,
-                checked((long)(item.Attributes.Size ?? 0)),
-                item.Attributes.Modified ?? DateTimeOffset.UnixEpoch,
-                item.Attributes.Mode,
-                linkTarget));
+            result.Add(new FileEntry(itemPath, item.Name, kind, checked((long)(item.Attributes.Size ?? 0)),
+                item.Attributes.Modified ?? DateTimeOffset.UnixEpoch, item.Attributes.Mode, linkTarget));
         }
         return result;
     }
@@ -175,15 +160,10 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             await session.RemoveAsync(path, directory: true, cancellationToken).ConfigureAwait(false);
         else if (!directory && current.Kind == EntryKind.File)
             await session.RemoveAsync(path, directory: false, cancellationToken).ConfigureAwait(false);
-        else
-            throw new IOException("The entry type changed; delete was stopped.");
+        else throw new IOException("The entry type changed; delete was stopped.");
     }
 
-    public Task SetMetadataAsync(
-        string path,
-        DateTimeOffset modified,
-        uint? mode,
-        CancellationToken cancellationToken)
+    public Task SetMetadataAsync(string path, DateTimeOffset modified, uint? mode, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         return _session.SetMetadataAsync(path, modified, mode, cancellationToken);
@@ -205,21 +185,13 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _lifecycle.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            await _session.DisposeAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            _lifecycle.Release();
-            _lifecycle.Dispose();
-        }
+        try { await _session.DisposeAsync().ConfigureAwait(false); }
+        finally { _lifecycle.Release(); _lifecycle.Dispose(); }
     }
 
     private void ThrowIfDisposed()
     {
-        if (Volatile.Read(ref _disposed) != 0)
-            throw new ObjectDisposedException(nameof(SftpFileSystem));
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(SftpFileSystem));
     }
 
     private static EntryKind Kind(uint? mode)
@@ -227,10 +199,8 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
         if (mode is null) return EntryKind.Other;
         return (mode.Value & 0xF000) switch
         {
-            0x4000 => EntryKind.Directory,
-            0x8000 => EntryKind.File,
-            0xA000 => EntryKind.SymbolicLink,
-            _ => EntryKind.Other
+            0x4000 => EntryKind.Directory, 0x8000 => EntryKind.File,
+            0xA000 => EntryKind.SymbolicLink, _ => EntryKind.Other
         };
     }
 
@@ -244,7 +214,6 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
 
     private sealed class SftpStream : Stream
     {
-        // Leave room for packet headers and handles within OpenSSH's 256 KiB limit.
         private const int DataChunkSize = 32 * 1024;
         private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(2);
         private readonly SftpSession _session;
@@ -261,7 +230,6 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             _writable = writable;
             _length = length;
         }
-
         public override bool CanRead => !_writable && Volatile.Read(ref _closed) == 0;
         public override bool CanSeek => Volatile.Read(ref _closed) == 0;
         public override bool CanWrite => _writable && Volatile.Read(ref _closed) == 0;
@@ -269,33 +237,24 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
         public override long Position { get => _position; set => Seek(value, SeekOrigin.Begin); }
         public override void Flush() { }
         public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
         public override int Read(byte[] buffer, int offset, int count) =>
             ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
-        public override async ValueTask<int> ReadAsync(
-            Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanRead) throw new NotSupportedException();
             if (buffer.Length == 0) return 0;
-            var data = await _session.ReadAsync(
-                _handle,
-                checked((ulong)_position),
-                Math.Min(buffer.Length, DataChunkSize),
-                cancellationToken).ConfigureAwait(false);
+            var data = await _session.ReadAsync(_handle, checked((ulong)_position),
+                Math.Min(buffer.Length, DataChunkSize), cancellationToken).ConfigureAwait(false);
             data.AsSpan().CopyTo(buffer.Span);
             _position += data.Length;
             return data.Length;
         }
-
         public override void Write(byte[] buffer, int offset, int count) =>
             WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
-        public override async ValueTask WriteAsync(
-            ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanWrite) throw new NotSupportedException();
@@ -303,34 +262,26 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             while (offset < buffer.Length)
             {
                 var count = Math.Min(DataChunkSize, buffer.Length - offset);
-                await _session.WriteAsync(
-                    _handle,
-                    checked((ulong)_position),
-                    buffer.Slice(offset, count),
+                await _session.WriteAsync(_handle, checked((ulong)_position), buffer.Slice(offset, count),
                     cancellationToken).ConfigureAwait(false);
                 offset += count;
                 _position += count;
                 _length = Math.Max(_length, _position);
             }
         }
-
         public override long Seek(long offset, SeekOrigin origin)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             var next = origin switch
             {
-                SeekOrigin.Begin => offset,
-                SeekOrigin.Current => checked(_position + offset),
-                SeekOrigin.End => checked(_length + offset),
-                _ => throw new ArgumentOutOfRangeException(nameof(origin))
+                SeekOrigin.Begin => offset, SeekOrigin.Current => checked(_position + offset),
+                SeekOrigin.End => checked(_length + offset), _ => throw new ArgumentOutOfRangeException(nameof(origin))
             };
             if (next < 0) throw new IOException("Cannot seek before the start of a file.");
             _position = next;
             return next;
         }
-
         public override void SetLength(long value) => throw new NotSupportedException();
-
         protected override void Dispose(bool disposing)
         {
             try
@@ -340,29 +291,22 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
             }
             finally { base.Dispose(disposing); }
         }
-
         public override async ValueTask DisposeAsync()
         {
             try
             {
-                if (Interlocked.Exchange(ref _closed, 1) == 0)
-                    await CloseHandleAsync().ConfigureAwait(false);
+                if (Interlocked.Exchange(ref _closed, 1) == 0) await CloseHandleAsync().ConfigureAwait(false);
             }
             finally { GC.SuppressFinalize(this); }
         }
-
         private async Task CloseHandleAsync()
         {
             using var timeout = new CancellationTokenSource(CloseTimeout);
-            try
-            {
-                await _session.CloseAsync(_handle, timeout.Token).ConfigureAwait(false);
-            }
+            try { await _session.CloseAsync(_handle, timeout.Token).ConfigureAwait(false); }
             catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
             {
-                // A write can fail when the server flushes buffered data on CLOSE.
-                // Normal write completion must propagate this failure before rename
-                // or Move source deletion. Read-only handles remain cleanup-only.
+                // A write can fail while flushing on CLOSE. Propagate normal
+                // write completion failures before rename or Move source deletion.
                 if (_writable)
                     throw new IOException(
                         "SFTP write CLOSE was not acknowledged successfully; completion is unconfirmed. " +
