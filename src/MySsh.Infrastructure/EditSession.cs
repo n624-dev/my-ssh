@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using MySsh.Core;
 
@@ -8,6 +7,7 @@ namespace MySsh.Infrastructure;
 public sealed class EditSession
 {
     private readonly IFileSystem _fileSystem;
+    private TextFileDocument? _textDocument;
     public FileEntry Original { get; }
     public string DraftDirectory { get; }
     public string DraftPath { get; }
@@ -53,7 +53,6 @@ public sealed class EditSession
         }
         catch
         {
-            // No editor has received this draft yet, so there are no user edits to lose.
             try { Directory.Delete(directory, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             throw;
         }
@@ -61,27 +60,29 @@ public sealed class EditSession
 
     public string ReadText()
     {
-        using var input = File.OpenRead(DraftPath);
-        using var reader = new StreamReader(input, new UTF8Encoding(false, true), true);
-        return reader.ReadToEnd();
+        _textDocument = TextFileDocument.Read(DraftPath);
+        return _textDocument.EditorText;
     }
 
     public void WriteText(string text)
     {
+        // Encode before opening the pending file. Invalid Unicode or an unknown
+        // source encoding must not replace even the last recoverable draft.
+        var document = _textDocument ??= TextFileDocument.Read(DraftPath);
+        var bytes = document.Encode(text);
         var pending = Path.Combine(DraftDirectory, "save-" + Guid.NewGuid().ToString("N"));
         try
         {
             using (var output = PrivateStorage.CreateFile(pending))
             {
-                var bytes = new UTF8Encoding(false).GetBytes(text);
                 output.Write(bytes);
                 output.Flush(true);
             }
             File.Move(pending, DraftPath, true);
+            _textDocument = TextFileDocument.Decode(bytes);
         }
         finally
         {
-            // DraftPath still contains the previous durable draft if replacement failed.
             if (File.Exists(pending)) File.Delete(pending);
         }
     }
@@ -98,15 +99,12 @@ public sealed class EditSession
                 current.Modified != Original.Modified || current.Mode != Original.Mode)
                 throw new IOException("The original file or its permissions changed. Your draft is retained; use Save as or keep it for recovery.");
         }
-        // Preserve the target's permissions, not the private local draft's permissions.
-        // TransferEngine applies these to the partial file BEFORE the atomic rename;
-        // a chmod failure therefore cannot publish a file with incorrect permissions.
+        // Preserve target permissions before commit, not the private draft mode.
         await using var contents = new EditContentFileSystem(Original.Mode);
         await new TransferEngine().CopyAsync(contents, DraftPath, _fileSystem, path,
             new(PreserveMetadata: true, Conflict: replacingOriginal ? ConflictAction.Overwrite : ConflictAction.Ask),
             null, ct).ConfigureAwait(false);
         Saved = true;
-        // A cleanup error after commit is not a failed save and must not trigger another overwrite.
         try { Discard(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
