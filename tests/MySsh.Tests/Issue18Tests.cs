@@ -53,9 +53,10 @@ internal sealed class Issue18Tests : IRegressionCase
                 ? new DirectoryInfo(path).GetAccessControl()
                 : new FileInfo(path).GetAccessControl();
             var rules = acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToArray();
-            RegressionCases.Check(acl.AreAccessRulesProtected && rules.Length > 0 &&
-                rules.All(rule => rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Equals(identity.User)),
-                "A staging ACL grants access to another principal: " + path);
+            RegressionCases.Check(acl.AreAccessRulesProtected && rules.Length > 0, "Staging ACL is not protected: " + path);
+            foreach (var rule in rules)
+                RegressionCases.Check(rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Equals(identity.User),
+                    "A staging ACL grants access to another principal: " + path);
         }
         else
         {
