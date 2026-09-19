@@ -220,10 +220,11 @@ internal sealed partial class FileManagerWindow
 
     private void GoToPath()
     {
-        var current = _activeLocal ? _currentLocal : _currentRemote;
-        var path = Prompt("Go to Path", "Path", current);
+        var localSide = _activeLocal;
+        var current = localSide ? _currentLocal : _currentRemote;
+        var path = PathPrompt.Show(localSide ? _local : _remote, current);
         if (string.IsNullOrWhiteSpace(path)) return;
-        try { NavigatePane(_activeLocal, path); }
+        try { NavigatePane(localSide, path); }
         catch (Exception ex) { ShowOperationError("Go to path", ex); }
     }
 
