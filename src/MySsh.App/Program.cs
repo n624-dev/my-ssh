@@ -49,24 +49,7 @@ internal static class Program
                     continue;
                 }
 
-                await using var local = new LocalFileSystem();
-                await using var remote = await AuthenticationScreen.RunAsync(() =>
-                    SftpFileSystem.ConnectAsync(selection.Connection, CancellationToken.None));
-                await using var transfers = new TransferQueue(settings.Config.ParallelTransfers);
-                var state = settings.Browser(selection.Connection);
-
-                InitializeUi();
-                try
-                {
-                    var window = new FileManagerWindow(selection.Connection, local, remote, state, settings, transfers);
-                    Application.Top.Add(window);
-                    Application.Run();
-                }
-                finally
-                {
-                    settings.SaveState();
-                    ShutdownUi();
-                }
+                await FileManagerSession.RunAsync(selection.Connection, settings);
             }
         }
         catch (Exception ex)

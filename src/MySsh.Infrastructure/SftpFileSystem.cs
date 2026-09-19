@@ -5,14 +5,16 @@ namespace MySsh.Infrastructure;
 public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
 {
     private readonly Connection _connection;
+    private readonly IConnectionInteraction? _interaction;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private SftpSession _session;
     private int _disposed;
 
-    internal SftpFileSystem(Connection connection, SftpSession session)
+    internal SftpFileSystem(Connection connection, SftpSession session, IConnectionInteraction? interaction = null)
     {
         _connection = connection;
         _session = session;
+        _interaction = interaction;
     }
 
     public bool IsRemote => true;
@@ -24,11 +26,18 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
 
     public static async Task<SftpFileSystem> ConnectAsync(
         Connection connection,
-        CancellationToken cancellationToken) =>
-        new(connection, await SftpSession.ConnectAsync(connection, cancellationToken).ConfigureAwait(false));
+        CancellationToken cancellationToken,
+        IConnectionInteraction? interaction = null) =>
+        new(connection, await ConnectSessionAsync(connection, cancellationToken, interaction).ConfigureAwait(false), interaction);
+
+    private static Task<SftpSession> ConnectSessionAsync(Connection connection,
+        CancellationToken cancellationToken, IConnectionInteraction? interaction) =>
+        interaction is null
+            ? SftpSession.ConnectAsync(connection, cancellationToken)
+            : interaction.RunAsync(token => SftpSession.ConnectAsync(connection, token), cancellationToken);
 
     public Task<SftpFileSystem> CreateSiblingAsync(CancellationToken cancellationToken) =>
-        ConnectAsync(_connection, cancellationToken);
+        ConnectAsync(_connection, cancellationToken, _interaction);
 
     public async Task ReconnectAsync(CancellationToken cancellationToken)
     {
@@ -36,7 +45,7 @@ public sealed class SftpFileSystem : IFileSystem, IFileSystemNamespace
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var replacement = await SftpSession.ConnectAsync(_connection, cancellationToken).ConfigureAwait(false);
+            var replacement = await ConnectSessionAsync(_connection, cancellationToken, _interaction).ConfigureAwait(false);
             var old = _session;
             _session = replacement;
             await old.DisposeAsync().ConfigureAwait(false);
