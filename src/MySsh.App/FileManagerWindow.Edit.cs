@@ -14,7 +14,7 @@ internal sealed partial class FileManagerWindow
             MessageBox.Query(65, 9, "Properties", Properties(entry), "OK");
             return;
         }
-        if (entry.Length > 1024 * 1024)
+        if (entry.Length > PreviewReader.Limit)
         {
             MessageBox.Query(65, 9, "Preview", "Text preview is limited to 1 MiB.\n" + Properties(entry), "OK");
             return;
@@ -22,9 +22,7 @@ internal sealed partial class FileManagerWindow
         var bytes = UiFileOperation.Run("Read preview", async ct =>
         {
             await using var stream = await fs.OpenReadAsync(entry.Path, ct).ConfigureAwait(false);
-            using var memory = new MemoryStream();
-            await stream.CopyToAsync(memory, ct).ConfigureAwait(false);
-            return memory.ToArray();
+            return await PreviewReader.ReadAsync(stream, ct).ConfigureAwait(false);
         });
         if (bytes.Take(Math.Min(bytes.Length, 4096)).Any(x => x == 0))
         {
