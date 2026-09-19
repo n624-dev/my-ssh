@@ -331,7 +331,7 @@ internal static class SelectionUi
     private enum UserDialogAction { Back, Connect, Add, Remove }
     private sealed record UserDialogResult(UserDialogAction Action, string Value);
 
-    private sealed class CompletingTextField : TextField
+    internal sealed class CompletingTextField : TextField
     {
         private readonly string[] _candidates;
         public Action? Changed { get; set; }
@@ -347,6 +347,7 @@ internal static class SelectionUi
             {
                 var current = Text?.ToString() ?? "";
                 Text = Completion.LongestCommonPrefix(_candidates, current);
+                CursorPosition = Text.RuneCount;
                 Changed?.Invoke();
                 return true;
             }
