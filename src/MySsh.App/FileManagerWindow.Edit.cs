@@ -20,10 +20,13 @@ internal sealed partial class FileManagerWindow
             MessageBox.Query(65, 9, "Preview", "Text preview is limited to 1 MiB.\n" + Properties(entry), "OK");
             return;
         }
-        using var stream = fs.OpenReadAsync(entry.Path, CancellationToken.None).GetAwaiter().GetResult();
-        using var memory = new MemoryStream();
-        stream.CopyTo(memory);
-        var bytes = memory.ToArray();
+        var bytes = UiFileOperation.Run("Read preview", async ct =>
+        {
+            await using var stream = await fs.OpenReadAsync(entry.Path, ct).ConfigureAwait(false);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory, ct).ConfigureAwait(false);
+            return memory.ToArray();
+        });
         if (bytes.Take(Math.Min(bytes.Length, 4096)).Any(x => x == 0))
         {
             MessageBox.Query(65, 9, "Preview", "Binary file\n" + Properties(entry), "OK");
@@ -79,14 +82,13 @@ internal sealed partial class FileManagerWindow
             MessageBox.Query(75, 8, "Edit", "Built-in editing is limited to 4 MiB. Configure an external editor for larger files.", "OK");
             return;
         }
-
         EditSession? session = null;
         try
         {
             var fs = _activeLocal ? _local : _remote;
-            session = EditSession.OpenAsync(fs, entry.Path,
-                Path.Combine(_settings.DirectoryPath, "edit-drafts"), _activeLocal ? "LOCAL" : _connection.Key,
-                CancellationToken.None).GetAwaiter().GetResult();
+            var location = _activeLocal ? "LOCAL" : _connection.Key;
+            session = UiFileOperation.Run("Prepare edit draft", ct => EditSession.OpenAsync(fs, entry.Path,
+                Path.Combine(_settings.DirectoryPath, "edit-drafts"), location, ct));
             if (external) ExternalEdit(session, fs);
             else BuiltInEdit(session, fs);
             if (session.Saved) ReloadPane(_activeLocal);
@@ -94,7 +96,7 @@ internal sealed partial class FileManagerWindow
         catch (Exception ex)
         {
             var recovery = session is null ? "" : "\nDraft retained at: " + Safe(session.DraftPath);
-            MessageBox.ErrorQuery(75, 12, "Edit", ex.Message + recovery, "OK");
+            MessageBox.ErrorQuery(75, 12, "Edit", Safe(ex.Message) + recovery, "OK");
         }
     }
 
@@ -103,7 +105,6 @@ internal sealed partial class FileManagerWindow
         var text = session.ReadText();
         while (!session.Saved)
         {
-            // Esc is Keep Draft, never an implicit discard.
             var action = EditAction.Keep;
             var save = new Button("Save") { IsDefault = true };
             var saveAs = new Button("Save as");
@@ -121,20 +122,15 @@ internal sealed partial class FileManagerWindow
             editor.SetFocus();
             Application.Run(dialog);
             text = editor.Text?.ToString() ?? "";
-
             if (action == EditAction.Discard)
             {
                 if (ConfirmDiscard(session)) return;
                 continue;
             }
-            try
-            {
-                // Persist the edited text BEFORE checking the original or uploading.
-                session.WriteText(text);
-            }
+            try { session.WriteText(text); }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(75, 10, "Draft not saved", ex.Message + "\nThe editor will reopen with your text.", "OK");
+                MessageBox.ErrorQuery(75, 10, "Draft not saved", Safe(ex.Message) + "\nThe editor will reopen with your text.", "OK");
                 continue;
             }
             if (action == EditAction.Keep) { ShowDraftLocation(session); return; }
@@ -142,12 +138,11 @@ internal sealed partial class FileManagerWindow
             {
                 var destination = action == EditAction.SaveAs ? EditDestination(session, fs) : session.Original.Path;
                 if (destination is null) continue;
-                session.SaveAsync(destination, CancellationToken.None).GetAwaiter().GetResult();
+                UiFileOperation.Run("Save edited file", ct => session.SaveAsync(destination, ct));
             }
             catch (Exception ex)
             {
-                // Reopen the editor with the same buffer; the durable draft is also retained.
-                MessageBox.ErrorQuery(75, 12, "Save failed", ex.Message + "\nDraft: " + Safe(session.DraftPath), "OK");
+                MessageBox.ErrorQuery(75, 12, "Save failed", Safe(ex.Message) + "\nDraft: " + Safe(session.DraftPath), "OK");
             }
         }
     }
@@ -163,9 +158,8 @@ internal sealed partial class FileManagerWindow
             process.WaitForExit();
             if (process.ExitCode != 0) throw new IOException($"Editor exited with code {process.ExitCode}.");
         }
-
         try { RunEditor(); }
-        catch (Exception ex) { MessageBox.ErrorQuery(75, 10, "Editor", ex.Message + "\nYour draft has been retained.", "OK"); }
+        catch (Exception ex) { MessageBox.ErrorQuery(75, 10, "Editor", Safe(ex.Message) + "\nYour draft has been retained.", "OK"); }
         while (!session.Saved)
         {
             var action = Choose("Edited file", new List<object>
@@ -179,11 +173,11 @@ internal sealed partial class FileManagerWindow
                 if (action == 2) { RunEditor(); continue; }
                 var destination = action == 1 ? EditDestination(session, fs) : session.Original.Path;
                 if (destination is null) continue;
-                session.SaveAsync(destination, CancellationToken.None).GetAwaiter().GetResult();
+                UiFileOperation.Run("Save edited file", ct => session.SaveAsync(destination, ct));
             }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(75, 12, "Save failed", ex.Message + "\nDraft: " + Safe(session.DraftPath), "OK");
+                MessageBox.ErrorQuery(75, 12, "Save failed", Safe(ex.Message) + "\nDraft: " + Safe(session.DraftPath), "OK");
             }
         }
     }
@@ -197,8 +191,7 @@ internal sealed partial class FileManagerWindow
 
     private static bool ConfirmDiscard(EditSession session)
     {
-        if (MessageBox.Query(70, 8, "Discard draft", "Permanently discard this edited draft?", "Keep", "Discard") != 1)
-            return false;
+        if (MessageBox.Query(70, 8, "Discard draft", "Permanently discard this edited draft?", "Keep", "Discard") != 1) return false;
         session.Discard();
         return true;
     }

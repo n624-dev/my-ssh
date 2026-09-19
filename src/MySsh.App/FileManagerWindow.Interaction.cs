@@ -15,7 +15,6 @@ internal sealed partial class FileManagerWindow
             MessageBox.Query(55, 7, "Reconnect", "This remote backend cannot reconnect.", "OK");
             return;
         }
-        // The outer session loop restores the console before starting ssh.
         ReconnectRequested = true;
         Application.RequestStop();
     }
@@ -41,15 +40,18 @@ internal sealed partial class FileManagerWindow
 
     internal void RestoreInteractionState(InteractionState snapshot)
     {
+        if (!_browserLoaded)
+        {
+            _pendingInteractionState = snapshot;
+            return;
+        }
         _currentLocal = snapshot.LocalPath;
         _currentRemote = snapshot.RemotePath;
         _localFilter = snapshot.LocalFilter;
         _remoteFilter = snapshot.RemoteFilter;
         _sortMode = (SortMode)snapshot.Sort;
         _sortDescending = snapshot.Descending;
-        _activeLocal = snapshot.ActiveLocal;
         ReloadAll();
-        // The fresh listings already include completions during authentication.
         foreach (var job in _transfers.Snapshot())
             if (job.State is TransferState.Completed or TransferState.Partial)
                 _reloadedCompleted.Add(job.Id);
@@ -61,8 +63,11 @@ internal sealed partial class FileManagerWindow
             var index = _queueRows.FindIndex(job => job.Id == id);
             if (index >= 0) _queueList.SelectedItem = index;
         }
+        // Closing a progress dialog can send Enter to the previously focused
+        // list. Restore the requested pane only after all I/O dialogs are done.
+        _activeLocal = snapshot.ActiveLocal;
         if (snapshot.QueueFocused) _queueList.SetFocus();
-        else if (_activeLocal) _localList.SetFocus();
+        else if (snapshot.ActiveLocal) _localList.SetFocus();
         else _remoteList.SetFocus();
     }
 
