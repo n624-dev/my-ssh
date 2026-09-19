@@ -2,7 +2,7 @@ using MySsh.Core;
 
 namespace MySsh.Infrastructure;
 
-public sealed class LocalFileSystem : IFileSystem, IDisposable
+public sealed partial class LocalFileSystem : IFileSystem, IDisposable
 {
     public bool IsRemote => false;
     public StringComparison PathComparison => OperatingSystem.IsWindows()
