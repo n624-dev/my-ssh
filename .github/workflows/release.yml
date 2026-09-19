@@ -82,11 +82,10 @@ jobs:
       - name: Package Linux release
         if: startsWith(matrix.rid, 'linux-')
         shell: bash
-        run: |
-          mkdir -p release
-          archive="release/my-ssh-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz"
-          tar -C "publish/${{ matrix.rid }}" -czf "$archive" my-ssh myssh LICENSE Terminal.Gui.LICENSE
-          sha256sum "$archive" > "$archive.sha256"
+        run: >-
+          bash .github/scripts/package-linux-release.sh
+          "publish/${{ matrix.rid }}" release
+          "my-ssh-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz"
       - uses: actions/upload-artifact@v7
         with:
           name: my-ssh-release-${{ matrix.rid }}

@@ -7,5 +7,7 @@
     <ProjectReference Include="../../src/MySsh.App/MySsh.App.csproj" />
     <ProjectReference Include="../../src/MySsh.Core/MySsh.Core.csproj" />
     <ProjectReference Include="../../src/MySsh.Infrastructure/MySsh.Infrastructure.csproj" />
+    <None Include="../../.github/scripts/package-linux-release.sh" Link="package-linux-release.sh"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
