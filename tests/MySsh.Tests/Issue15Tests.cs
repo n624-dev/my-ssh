@@ -73,7 +73,7 @@ internal sealed class Issue15Tests : IRegressionCase
             var changed = changedSide == "source" ? first : copiedFirst;
             var stamp = File.GetLastWriteTimeUtc(changed);
             await File.WriteAllTextAsync(changed, "modified", ct);
-            File.SetLastWriteTimeUtc(changed, stamp); // Same size/time: requires content verification.
+            File.SetLastWriteTimeUtc(changed, stamp);
             await RegressionCases.ThrowsAsync<TransferConflictException>(() => engine.CopyAsync(local, source, local,
                 destination, new(), null, ct, resume));
             RegressionCases.Check(await File.ReadAllTextAsync(changed, ct) == "modified", "Resume silently replaced a changed file.");
@@ -84,8 +84,9 @@ internal sealed class Issue15Tests : IRegressionCase
         {
             await engine.CopyAsync(local, source, local, destination, new(), null, ct, resume);
         }
-        RegressionCases.Check((await File.ReadAllBytesAsync(second, ct)).SequenceEqual(
-            await File.ReadAllBytesAsync(Path.Combine(destination, "b.bin"), ct)), "Resumed file contents differ.");
+        var expectedBytes = await File.ReadAllBytesAsync(second, ct);
+        var actualBytes = await File.ReadAllBytesAsync(Path.Combine(destination, "b.bin"), ct);
+        RegressionCases.Check(expectedBytes.SequenceEqual(actualBytes), "Resumed file contents differ.");
         RegressionCases.Check(await File.ReadAllTextAsync(first, ct) == await File.ReadAllTextAsync(copiedFirst, ct),
             "Explicit conflict handling did not copy the current source.");
         await RegressionCases.ThrowsAsync<InvalidOperationException>(() => engine.CopyAsync(local, source, local,

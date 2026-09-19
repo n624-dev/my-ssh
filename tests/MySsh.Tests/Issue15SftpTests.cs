@@ -42,7 +42,8 @@ internal sealed class Issue15SftpTests : IRegressionCase
             RegressionCases.Check(!Directory.Exists(source), "Verified resumed move did not remove its source tree.");
             var download = localRoot.File("download.bin");
             await engine.CopyAsync(reconnected, reconnected.Join(root, "b.bin"), local, download, new(), null, ct);
-            RegressionCases.Check(bytes.SequenceEqual(await File.ReadAllBytesAsync(download, ct)), "Resumed SFTP contents differ.");
+            var downloadedBytes = await File.ReadAllBytesAsync(download, ct);
+            RegressionCases.Check(bytes.SequenceEqual(downloadedBytes), "Resumed SFTP contents differ.");
         }
         finally
         {
