@@ -153,6 +153,7 @@ internal sealed partial class FileManagerWindow
             {
                 EntryKind.Directory => "/",
                 EntryKind.SymbolicLink => " -> " + Safe(Entry.LinkTarget ?? "?"),
+                EntryKind.Other => " [special]",
                 _ => ""
             };
             var size = Entry.Kind == EntryKind.File ? FormatSize(Entry.Length) : "";

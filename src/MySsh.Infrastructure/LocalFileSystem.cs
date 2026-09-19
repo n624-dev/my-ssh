@@ -38,6 +38,7 @@ public sealed partial class LocalFileSystem : IFileSystem, IDisposable
             FileSystemInfo info = isDirectory ? new DirectoryInfo(path) : new FileInfo(path);
             var kind = OperatingSystem.IsWindows()
                 ? WindowsEntryKind.Read(path, attributes)
+                : OperatingSystem.IsLinux() ? LinuxEntryKind.Read(path)
                 : attributes.HasFlag(FileAttributes.ReparsePoint) ? EntryKind.SymbolicLink
                 : isDirectory ? EntryKind.Directory : EntryKind.File;
             var isLink = kind == EntryKind.SymbolicLink;
@@ -130,8 +131,8 @@ public sealed partial class LocalFileSystem : IFileSystem, IDisposable
     public async Task SetMetadataAsync(string path, DateTimeOffset modified, uint? mode, CancellationToken cancellationToken)
     {
         var entry = await StatAsync(path, cancellationToken).ConfigureAwait(false) ?? throw new FileNotFoundException(path);
-        if (entry.Kind == EntryKind.SymbolicLink)
-            throw new IOException("Changing link metadata is not supported.");
+        if (entry.Kind is not (EntryKind.File or EntryKind.Directory))
+            throw new IOException("Changing link or special file metadata is not supported.");
         if (entry.Kind == EntryKind.Directory) Directory.SetLastWriteTimeUtc(path, modified.UtcDateTime);
         else File.SetLastWriteTimeUtc(path, modified.UtcDateTime);
         if (!OperatingSystem.IsWindows() && mode is { } unixMode)
