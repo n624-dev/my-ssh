@@ -92,6 +92,7 @@ jobs:
           name: my-ssh-${{ matrix.rid }}
           path: publish/${{ matrix.rid }}/
           if-no-files-found: error
+          retention-days: 7
       - name: Publish standalone verification runner
         if: matrix.rid != 'linux-arm64'
         shell: bash
@@ -107,3 +108,4 @@ jobs:
           name: my-ssh-tests-${{ matrix.rid }}
           path: verification/${{ matrix.rid }}/
           if-no-files-found: error
+          retention-days: 7
