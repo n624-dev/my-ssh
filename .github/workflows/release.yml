@@ -91,6 +91,7 @@ jobs:
           name: my-ssh-release-${{ matrix.rid }}
           path: release/
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: Create GitHub Release
