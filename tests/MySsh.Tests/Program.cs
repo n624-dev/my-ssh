@@ -195,7 +195,7 @@ static async Task TestLiveProgress()
     {
         var source = Path.Combine(root, "large.bin");
         var destination = Path.Combine(root, "large-copy.bin");
-        await File.WriteAllBytesAsync(source, Enumerable.Range(0, 900_000).Select(i => (byte)i).ToArray());
+        await File.WriteAllBytesAsync(source, Enumerable.Range(0, 2_900_000).Select(i => (byte)i).ToArray());
         var updates = new List<TransferProgress>();
         var progress = new InlineProgress<TransferProgress>(updates.Add);
 
@@ -203,9 +203,9 @@ static async Task TestLiveProgress()
         await new TransferEngine().CopyAsync(local, source, local, destination,
             new TransferOptions(), progress, CancellationToken.None);
 
-        True(updates.Any(x => x.BytesTransferred > 0 && x.BytesTransferred < 900_000),
+        True(updates.Any(x => x.BytesTransferred > 0 && x.BytesTransferred < 2_900_000),
             "no in-file progress update was reported");
-        Equal(900_000L, updates.Last().BytesTransferred);
+        Equal(2_900_000L, updates.Last().BytesTransferred);
         Equal(TransferState.Completed, updates.Last().State);
     }
     finally

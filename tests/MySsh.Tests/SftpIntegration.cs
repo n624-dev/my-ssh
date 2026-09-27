@@ -19,7 +19,7 @@ internal static class SftpIntegration
         {
             await VerifyUiContextAsync(connection, remoteRoot, ct);
             var engine = new TransferEngine();
-            // Larger than the old 256 KiB WRITE packet, with a non-aligned final chunk.
+            // Cross a full 1 MiB pipeline window, with a non-aligned final chunk.
             var bytes = new byte[1024 * 1024 + 123];
             new Random(42).NextBytes(bytes);
             var source = Path.Combine(localRoot, "sample space 日本語.bin");
