@@ -143,7 +143,7 @@ public sealed class SettingsStore : IDisposable
         if (!File.Exists(path))
             throw new IOException(name + " was removed by another process; it was not recreated from stale state.");
         var disk = JsonNode.Parse(File.ReadAllText(path)) ?? throw new IOException(name + " is empty.");
-        var merged = SettingsConcurrency.Merge(baseline, local, disk, name);
+        var merged = SettingsConcurrency.Merge(baseline, local, disk, name, mergeBrowserViews: name == "state.json");
         AtomicJson(path, merged);
         // Track what this instance actually knows, not the merged disk value.
         // That lets subsequent saves preserve fields changed by other instances

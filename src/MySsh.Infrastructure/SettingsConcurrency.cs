@@ -5,6 +5,15 @@ namespace MySsh.Infrastructure;
 
 internal static class SettingsConcurrency
 {
+    // These fields describe one window's view, not durable user configuration.
+    // Keep paths, selections and filters together so a restored view is coherent.
+    private static readonly HashSet<string> ViewFields = new(StringComparer.Ordinal)
+    {
+        "localPath", "remotePath", "localSelection", "remoteSelection", "localMarked", "remoteMarked",
+        "localFilter", "remoteFilter", "sort", "sortDescending", "activeLocal", "showHidden"
+    };
+    private enum MergeScope { Strict, State, Connections, Browser }
+
     // Held only while loading/merging/publishing JSON, never for an SSH session.
     // Keep the lock file in place: deleting it would allow locking different inodes.
     internal static FileStream Acquire(string directory, TimeSpan? timeout = null)
@@ -31,16 +40,17 @@ internal static class SettingsConcurrency
         }
     }
 
-    internal static JsonNode Merge(JsonNode baseline, JsonNode local, JsonNode disk, string file)
+    internal static JsonNode Merge(JsonNode baseline, JsonNode local, JsonNode disk, string file, bool mergeBrowserViews = false)
     {
         if (baseline is not JsonObject || disk is not JsonObject ||
             !JsonNode.DeepEquals(baseline["version"], disk["version"]))
             throw new IOException(file + " changed its format or version; it was not overwritten.");
-        return MergeNode(new(true, baseline), new(true, local), new(true, disk), file).Value
+        return MergeNode(new(true, baseline), new(true, local), new(true, disk), file,
+            mergeBrowserViews ? MergeScope.State : MergeScope.Strict).Value
             ?? throw new IOException("Settings root cannot be deleted.");
     }
 
-    private static Node MergeNode(Node baseline, Node local, Node disk, string path)
+    private static Node MergeNode(Node baseline, Node local, Node disk, string path, MergeScope scope)
     {
         if (Same(local, baseline)) return Clone(disk);
         if (Same(disk, baseline) || Same(local, disk)) return Clone(local);
@@ -52,9 +62,25 @@ internal static class SettingsConcurrency
                 .Concat(localObject.Select(x => x.Key)).Concat(diskObject.Select(x => x.Key))
                 .Distinct(StringComparer.Ordinal);
             var merged = new JsonObject();
+            if (scope == MergeScope.Browser)
+            {
+                // An unchanged window (e.g. during shutdown) must not roll back
+                // another window. When the local view changed, its entire view
+                // wins at this locked save; bookmarks still merge strictly below.
+                var view = JsonNode.DeepEquals(View(original), View(localObject)) ? diskObject : localObject;
+                foreach (var field in view.Where(pair => ViewFields.Contains(pair.Key)))
+                    merged.Add(field.Key, field.Value?.DeepClone());
+            }
             foreach (var key in keys)
             {
-                var value = MergeNode(Get(original, key), Get(localObject, key), Get(diskObject, key), path + "/" + key);
+                if (scope == MergeScope.Browser && ViewFields.Contains(key)) continue;
+                var childScope = scope switch
+                {
+                    MergeScope.State when key == "connections" => MergeScope.Connections,
+                    MergeScope.Connections => MergeScope.Browser,
+                    _ => MergeScope.Strict
+                };
+                var value = MergeNode(Get(original, key), Get(localObject, key), Get(diskObject, key), path + "/" + key, childScope);
                 if (value.Exists) merged.Add(key, value.Value);
             }
             return new(true, merged);
@@ -63,6 +89,10 @@ internal static class SettingsConcurrency
         // removed server/user by taking a naive union of two changed arrays.
         throw new IOException($"Settings conflict at {path}. Another instance changed the same setting. No file was overwritten; reopen the application to load the latest settings before retrying.");
     }
+
+    private static JsonObject View(JsonObject? browser) => new(
+        (browser?.Where(pair => ViewFields.Contains(pair.Key)) ?? Enumerable.Empty<KeyValuePair<string, JsonNode?>>())
+            .Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, pair.Value?.DeepClone())));
 
     private static Node Get(JsonObject? obj, string key) =>
         obj is not null && obj.TryGetPropertyValue(key, out var value) ? new(true, value) : new(false, null);
