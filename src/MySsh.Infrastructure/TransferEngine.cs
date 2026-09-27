@@ -4,7 +4,7 @@ namespace MySsh.Infrastructure;
 
 public sealed partial class TransferEngine
 {
-    private const int BufferSize = 256 * 1024;
+    private const int BufferSize = SftpSession.PipelineBytes;
 
     public async Task CopyAsync(IFileSystem source, string sourcePath,
         IFileSystem destination, string destinationPath, TransferOptions options,

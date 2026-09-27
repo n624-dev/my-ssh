@@ -214,7 +214,6 @@ public sealed partial class SftpFileSystem : IFileSystem, IFileSystemNamespace
 
     private sealed class SftpStream : Stream
     {
-        private const int DataChunkSize = 32 * 1024;
         private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(2);
         private readonly SftpSession _session;
         private readonly byte[] _handle;
@@ -245,11 +244,10 @@ public sealed partial class SftpFileSystem : IFileSystem, IFileSystemNamespace
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanRead) throw new NotSupportedException();
             if (buffer.Length == 0) return 0;
-            var data = await _session.ReadAsync(_handle, checked((ulong)_position),
-                Math.Min(buffer.Length, DataChunkSize), cancellationToken).ConfigureAwait(false);
-            data.AsSpan().CopyTo(buffer.Span);
-            _position += data.Length;
-            return data.Length;
+            var count = await _session.ReadPipelinedAsync(_handle, checked((ulong)_position), buffer,
+                cancellationToken).ConfigureAwait(false);
+            _position += count;
+            return count;
         }
         public override void Write(byte[] buffer, int offset, int count) =>
             WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
@@ -258,16 +256,9 @@ public sealed partial class SftpFileSystem : IFileSystem, IFileSystemNamespace
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             if (!CanWrite) throw new NotSupportedException();
-            var offset = 0;
-            while (offset < buffer.Length)
-            {
-                var count = Math.Min(DataChunkSize, buffer.Length - offset);
-                await _session.WriteAsync(_handle, checked((ulong)_position), buffer.Slice(offset, count),
-                    cancellationToken).ConfigureAwait(false);
-                offset += count;
-                _position += count;
-                _length = Math.Max(_length, _position);
-            }
+            await _session.WritePipelinedAsync(_handle, checked((ulong)_position), buffer, cancellationToken).ConfigureAwait(false);
+            _position += buffer.Length;
+            _length = Math.Max(_length, _position);
         }
         public override long Seek(long offset, SeekOrigin origin)
         {

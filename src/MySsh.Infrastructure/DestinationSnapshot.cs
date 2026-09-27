@@ -48,7 +48,7 @@ internal sealed class DestinationSnapshot(FileEntry? entry, byte[]? digest)
         var stream = await fs.OpenReadAsync(path, ct).ConfigureAwait(false);
         await using var lifetime = stream.ConfigureAwait(false);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[64 * 1024];
+        var buffer = new byte[SftpSession.PipelineBytes];
         long remaining = length;
         while (remaining > 0)
         {
