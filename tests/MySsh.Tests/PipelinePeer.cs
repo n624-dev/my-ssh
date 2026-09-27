@@ -13,6 +13,7 @@ internal sealed class PipelinePeer : IAsyncDisposable
     private int _outstanding;
     private int _received;
     public int MaximumOutstanding { get; private set; }
+    public int DataRequestCount => _received;
     public int DelayMilliseconds { get; init; }
     public int MaximumRead { get; init; } = int.MaxValue;
     public int FailWriteNumber { get; init; }
@@ -72,7 +73,7 @@ internal sealed class PipelinePeer : IAsyncDisposable
                 response = ScriptedSftp.Packet(103, ScriptedSftp.U32(id), ScriptedSftp.Blob(data));
             }
         }
-        if (_received >= 32) WindowReceived.TrySetResult();
+        if (_received >= MySsh.Infrastructure.SftpSession.PipelineRequests) WindowReceived.TrySetResult();
         _tasks.Add(ReplyAsync(response));
     }
 

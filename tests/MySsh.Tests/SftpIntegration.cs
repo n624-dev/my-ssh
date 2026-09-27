@@ -19,8 +19,8 @@ internal static class SftpIntegration
         {
             await VerifyUiContextAsync(connection, remoteRoot, ct);
             var engine = new TransferEngine();
-            // Cross a full 1 MiB pipeline window, with a non-aligned final chunk.
-            var bytes = new byte[1024 * 1024 + 123];
+            // Cross a full pipeline window, with a non-aligned final chunk.
+            var bytes = new byte[SftpSession.PipelineBytes + 123];
             new Random(42).NextBytes(bytes);
             var source = Path.Combine(localRoot, "sample space 日本語.bin");
             var destination = remote.Join(remoteRoot, Path.GetFileName(source));
@@ -31,7 +31,7 @@ internal static class SftpIntegration
             var downloadedBytes = await File.ReadAllBytesAsync(download, ct);
             Check(bytes.SequenceEqual(downloadedBytes), "round trip differs");
             Check((await remote.ListAsync(remoteRoot, ct)).Any(x => x.Name == Path.GetFileName(source)), "Unicode listing failed");
-            Console.WriteLine("PASS SFTP >1 MiB upload/download, Unicode and spaces");
+            Console.WriteLine("PASS SFTP multi-window upload/download, Unicode and spaces");
 
             var conflict = false;
             try { await engine.CopyAsync(local, source, remote, destination, new(), null, ct); }
