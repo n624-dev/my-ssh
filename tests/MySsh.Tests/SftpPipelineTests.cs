@@ -15,6 +15,7 @@ internal sealed class SftpPipelineTests : IRegressionCase
         await ErrorsAsync(ct);
         await CancellationAsync(ct);
         await BenchmarkAsync(ct);
+        await CompareWindowsAsync(ct);
     }
 
     private static async Task ReorderedAsync(CancellationToken ct)
@@ -69,10 +70,10 @@ internal sealed class SftpPipelineTests : IRegressionCase
         using var root = new TestDirectory();
         using var local = new LocalFileSystem();
         var source = root.File("source");
-        await File.WriteAllBytesAsync(source, new byte[100_000], ct);
+        await File.WriteAllBytesAsync(source, new byte[SftpSession.PipelineBytes + 123], ct);
         foreach (var closeFails in new[] { false, true })
         {
-            await using var peer = new PipelinePeer { FailWriteNumber = closeFails ? 0 : 2, FailClose = closeFails };
+            await using var peer = new PipelinePeer { FailWriteNumber = closeFails ? 0 : SftpSession.PipelineRequests, FailClose = closeFails };
             var session = await SftpSession.ConnectAsync(peer.Input, peer.Output, ct);
             await using var remote = new SftpFileSystem(new("fixture", "user"), session);
             var destination = new StreamDestination(local, remote);
@@ -98,10 +99,13 @@ internal sealed class SftpPipelineTests : IRegressionCase
             await using var peer = new PipelinePeer(new byte[SftpSession.PipelineBytes]) { HoldReplies = true };
             await using var session = await SftpSession.ConnectAsync(peer.Input, peer.Output, ct);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var buffer = new byte[SftpSession.PipelineBytes];
+            // More than one window must not send request 65 before any reply.
+            var buffer = new byte[SftpSession.PipelineBytes + SftpSession.DataChunkSize];
             Task active = write ? session.WritePipelinedAsync([1], 0, buffer, stop.Token)
                 : session.ReadPipelinedAsync([1], 0, buffer, stop.Token);
             await peer.WindowReceived.Task.WaitAsync(ct);
+            RegressionCases.Check(peer.DataRequestCount == SftpSession.PipelineRequests &&
+                peer.MaximumOutstanding == SftpSession.PipelineRequests, "Unacknowledged requests exceeded the window.");
             using var queued = new CancellationTokenSource();
             var waiting = session.WritePipelinedAsync([1], 0, buffer, queued.Token);
             queued.Cancel();
@@ -116,7 +120,7 @@ internal sealed class SftpPipelineTests : IRegressionCase
 
     private static async Task BenchmarkAsync(CancellationToken ct)
     {
-        var bytes = new byte[SftpSession.PipelineBytes];
+        var bytes = new byte[1024 * 1024];
         new Random(85).NextBytes(bytes);
         foreach (var write in new[] { false, true })
         {
@@ -139,11 +143,47 @@ internal sealed class SftpPipelineTests : IRegressionCase
                 }
                 elapsed.Add(watch.Elapsed.TotalMilliseconds);
                 RegressionCases.Check(bytes.SequenceEqual(write ? peer.Contents : read), "Benchmark data was corrupted.");
-                RegressionCases.Check(peer.MaximumOutstanding >= (pipelined ? 2 : 1) && peer.MaximumOutstanding <= 32,
+                RegressionCases.Check(peer.MaximumOutstanding >= (pipelined ? 2 : 1) && peer.MaximumOutstanding <= SftpSession.PipelineRequests,
                     "Requests were serialized or exceeded the pipeline bound.");
             }
             Console.WriteLine($"BENCH SFTP {(write ? "upload" : "download")} 1 MiB / 30 ms response delay: serial {elapsed[0]:F0} ms, pipeline {elapsed[1]:F0} ms ({elapsed[0] / elapsed[1]:F1}x)");
             RegressionCases.Check(elapsed[1] < elapsed[0] / 2, "Pipelining did not improve the controlled-latency transfer.");
+        }
+    }
+
+    private static async Task CompareWindowsAsync(CancellationToken ct)
+    {
+        var bytes = new byte[8 * 1024 * 1024];
+        new Random(86).NextBytes(bytes);
+        foreach (var write in new[] { false, true })
+        {
+            var samples = new[] { new List<double>(), new List<double>() };
+            for (var trial = 0; trial < 3; trial++)
+            for (var profile = 0; profile < 2; profile++)
+            {
+                // Alternate order and take medians to reduce warm-up/timer noise.
+                var index = (trial + profile) % 2;
+                var window = index == 0 ? 1024 * 1024 : SftpSession.PipelineBytes;
+                await using var peer = new PipelinePeer(write ? null : bytes) { DelayMilliseconds = 30 };
+                await using var session = await SftpSession.ConnectAsync(peer.Input, peer.Output, ct);
+                var read = new byte[bytes.Length];
+                var watch = Stopwatch.StartNew();
+                for (var offset = 0; offset < bytes.Length; offset += window)
+                {
+                    var count = Math.Min(window, bytes.Length - offset);
+                    if (write) await session.WritePipelinedAsync([1], (ulong)offset, bytes.AsMemory(offset, count), ct);
+                    else RegressionCases.Check(await session.ReadPipelinedAsync([1], (ulong)offset,
+                        read.AsMemory(offset, count), ct) == count, "Window comparison read was short.");
+                }
+                samples[index].Add(watch.Elapsed.TotalMilliseconds);
+                RegressionCases.Check(bytes.SequenceEqual(write ? peer.Contents : read), "Window comparison corrupted data.");
+                RegressionCases.Check(peer.MaximumOutstanding <= window / SftpSession.DataChunkSize,
+                    "Window comparison exceeded its request bound.");
+            }
+            var previous = samples[0].Order().ElementAt(1);
+            var current = samples[1].Order().ElementAt(1);
+            Console.WriteLine($"BENCH SFTP {(write ? "upload" : "download")} 8 MiB / 30 ms response delay (median of 3): 32 requests {previous:F0} ms, 64 requests {current:F0} ms ({previous / current:F2}x)");
+            // Timings are measurements, not a brittle pass/fail threshold on busy CI.
         }
     }
 

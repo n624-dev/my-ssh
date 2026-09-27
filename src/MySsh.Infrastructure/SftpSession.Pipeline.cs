@@ -3,7 +3,9 @@ namespace MySsh.Infrastructure;
 internal sealed partial class SftpSession
 {
     internal const int DataChunkSize = 32 * 1024;
-    internal const int PipelineRequests = 32;
+    // Match OpenSSH sftp's default outstanding request count. Keep each packet
+    // at 32 KiB for interoperability; data in flight is bounded to 2 MiB.
+    internal const int PipelineRequests = 64;
     internal const int PipelineBytes = DataChunkSize * PipelineRequests;
 
     // Only data operations use batches. Holding the existing request lock keeps
