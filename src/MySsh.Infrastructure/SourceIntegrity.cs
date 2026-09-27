@@ -12,12 +12,14 @@ internal static class SourceIntegrity
     /// This is not a filesystem snapshot or a lock on external writers.
     /// </summary>
     public static async Task<byte[]> VerifyAsync(IFileSystem source, string sourcePath, FileEntry expected,
-        IFileSystem destination, string partialPath, CancellationToken ct)
+        IFileSystem destination, string partialPath, CancellationToken ct, Action<string>? report = null)
     {
         var before = await source.StatAsync(sourcePath, ct).ConfigureAwait(false);
         if (!DestinationSnapshot.SameMetadata(expected, before)) throw Changed(sourcePath);
-        var copied = await DestinationSnapshot.ReadDigestAsync(destination, partialPath, expected.Length, ct).ConfigureAwait(false);
-        var current = await DestinationSnapshot.ReadDigestAsync(source, sourcePath, expected.Length, ct).ConfigureAwait(false);
+        var copied = await DestinationSnapshot.ReadDigestAsync(destination, partialPath, expected.Length, ct,
+            message => report?.Invoke("Verifying destination: " + message)).ConfigureAwait(false);
+        var current = await DestinationSnapshot.ReadDigestAsync(source, sourcePath, expected.Length, ct,
+            message => report?.Invoke("Verifying source: " + message)).ConfigureAwait(false);
         if (!CryptographicOperations.FixedTimeEquals(copied, current) ||
             !DestinationSnapshot.SameMetadata(expected, await source.StatAsync(sourcePath, ct).ConfigureAwait(false)))
             throw Changed(sourcePath);

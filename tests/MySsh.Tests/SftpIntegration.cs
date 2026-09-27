@@ -20,12 +20,19 @@ internal static class SftpIntegration
             await VerifyUiContextAsync(connection, remoteRoot, ct);
             var engine = new TransferEngine();
             // Cross a full pipeline window, with a non-aligned final chunk.
-            var bytes = new byte[SftpSession.PipelineBytes + 123];
+            var bytes = new byte[RemoteFileDigest.MinimumLength + 123];
             new Random(42).NextBytes(bytes);
-            var source = Path.Combine(localRoot, "sample space 日本語.bin");
+            var source = Path.Combine(localRoot, "sample space 日本語 ' $(printf injected) `printf injected`.bin");
             var destination = remote.Join(remoteRoot, Path.GetFileName(source));
             await File.WriteAllBytesAsync(source, bytes, ct);
             await engine.CopyAsync(local, source, remote, destination, new(), null, ct);
+            var digest = await ((IFileDigestProvider)remote).TryReadDigestAsync(destination, bytes.Length, ct);
+            Check(digest is not null && digest.SequenceEqual(System.Security.Cryptography.SHA256.HashData(bytes)),
+                "Server checksum unavailable or incorrect, including quoted shell metacharacters.");
+            var bounded = await RemoteFileDigest.TryReadAsync(connection, destination, 16, ct);
+            Check(bounded is not null && bounded.SequenceEqual(System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, 17))),
+                "Server checksum did not bound reads by length plus one.");
+            Console.WriteLine("PASS server SHA-256, literal shell metacharacters and bounded reads");
             var download = Path.Combine(localRoot, "download.bin");
             await engine.CopyAsync(remote, destination, local, download, new(), null, ct);
             var downloadedBytes = await File.ReadAllBytesAsync(download, ct);

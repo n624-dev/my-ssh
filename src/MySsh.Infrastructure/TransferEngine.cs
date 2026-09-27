@@ -74,8 +74,8 @@ public sealed partial class TransferEngine
                     var beforeFile = transferred;
                     var result = await CopyFileAsync(source, item.Source, item.Entry,
                         destination, item.Destination, options,
-                        currentFileBytes => progress?.Report(new(item.Source, item.Destination,
-                            beforeFile + currentFileBytes, totalBytes, completed, plan.Count, TransferState.Running)),
+                        (currentFileBytes, message) => progress?.Report(new(item.Source, item.Destination,
+                            beforeFile + currentFileBytes, totalBytes, completed, plan.Count, TransferState.Running, message)),
                         cancellationToken, resume).ConfigureAwait(false);
                     if (result.Skipped) skipped++;
                     else transferred += result.LogicalBytes;
