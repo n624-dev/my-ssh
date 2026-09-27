@@ -6,7 +6,7 @@ public sealed partial class TransferEngine
 {
     private static async Task<FileCopyResult> CopyFileAsync(IFileSystem source, string sourcePath,
         FileEntry sourceEntry, IFileSystem destination, string destinationPath, TransferOptions options,
-        Action<long> reportFileBytes, CancellationToken ct, TransferResumeState? resume)
+        Action<long, string> reportFileBytes, CancellationToken ct, TransferResumeState? resume)
     {
         var existing = await destination.StatAsync(destinationPath, ct).ConfigureAwait(false);
         if (existing is not null)
@@ -16,7 +16,8 @@ public sealed partial class TransferEngine
             if (options.Conflict != ConflictAction.Overwrite || existing.Kind != EntryKind.File)
                 throw new TransferConflictException(destinationPath);
         }
-        var version = await DestinationSnapshot.CaptureAsync(destination, destinationPath, existing, ct).ConfigureAwait(false);
+        var version = await DestinationSnapshot.CaptureAsync(destination, destinationPath, existing, ct,
+            message => reportFileBytes(0, "Verifying existing destination: " + message)).ConfigureAwait(false);
         var partial = destination.Join(destination.Parent(destinationPath),
             TransferTemporaryNames.Partial(destinationPath, sourcePath, sourceEntry));
         var partialEntry = await destination.StatAsync(partial, ct).ConfigureAwait(false);
@@ -29,7 +30,7 @@ public sealed partial class TransferEngine
                 await VerifyPrefixAsync(input, destination, partial, partialEntry.Length, ct).ConfigureAwait(false);
             offset = partialEntry.Length;
             input.Seek(offset, SeekOrigin.Begin);
-            reportFileBytes(offset);
+            reportFileBytes(offset, "Transferring");
         }
         else if (partialEntry is not null)
             throw new IOException($"Cannot resume because the partial destination is not a compatible regular file: {partial}");
@@ -52,7 +53,7 @@ public sealed partial class TransferEngine
                     if (count == 0) throw new IOException("The source became shorter during the transfer.");
                     await output.WriteAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
                     offset += count;
-                    reportFileBytes(offset);
+                    reportFileBytes(offset, "Transferring");
                 }
                 if (await input.ReadAsync(buffer.AsMemory(0, 1), ct).ConfigureAwait(false) != 0)
                     throw new IOException("The source grew during the transfer.");
@@ -72,12 +73,15 @@ public sealed partial class TransferEngine
             throw new IOException($"Transferred file mismatch: expected a regular file of {sourceEntry.Length} bytes.");
 
         // Verify ordinary Copy as well as Move, including resumed prefixes.
-        var digest = await SourceIntegrity.VerifyAsync(source, sourcePath, sourceEntry, destination, partial, ct).ConfigureAwait(false);
+        var digest = await SourceIntegrity.VerifyAsync(source, sourcePath, sourceEntry, destination, partial, ct,
+            message => reportFileBytes(offset, message)).ConfigureAwait(false);
         if (options.PreserveMetadata)
             await destination.SetMetadataAsync(partial, sourceEntry.Modified, sourceEntry.Mode, ct).ConfigureAwait(false);
         var committedMetadata = resume is null ? null : await destination.StatAsync(partial, ct).ConfigureAwait(false)
             ?? throw new IOException("Temporary file disappeared before recording its commit.");
-        await version.VerifyAsync(destination, destinationPath, ct).ConfigureAwait(false);
+        await version.VerifyAsync(destination, destinationPath, ct,
+            message => reportFileBytes(offset, "Verifying existing destination: " + message)).ConfigureAwait(false);
+        reportFileBytes(offset, "Finalizing...");
         await destination.RenameAsync(partial, destinationPath, existing is not null, ct).ConfigureAwait(false);
         // No cancellable work between acknowledged rename and recording ownership.
         if (committedMetadata is not null) resume!.Record(sourcePath, sourceEntry, destinationPath, committedMetadata, digest);

@@ -67,8 +67,10 @@ internal sealed partial class FileManagerWindow
         catch (Exception ex) { _message.Text = "Refresh failed: " + Safe(ex.Message); }
     }
 
-    private static string QueueText(TransferJobSnapshot job)
+    internal static string QueueText(TransferJobSnapshot job)
     {
+        if (job.State == TransferState.Running && (job.Message.StartsWith("Verifying ", StringComparison.Ordinal) || job.Message == "Finalizing..."))
+            return $"{job.State,-9} {Safe(job.Message)} | {Safe(PathLikeName(job.Source))} -> {Safe(job.Destination)}";
         var progress = job.TotalBytes is > 0 ? $" {job.BytesTransferred * 100.0 / job.TotalBytes:0.0}%" : "";
         var speed = job.BytesPerSecond is > 0 ? $" {FormatSize((long)job.BytesPerSecond.Value)}/s" : "";
         var eta = job.BytesPerSecond is > 0 && job.TotalBytes is { } total && total > job.BytesTransferred

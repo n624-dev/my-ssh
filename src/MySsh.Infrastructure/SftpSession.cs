@@ -45,6 +45,7 @@ internal sealed partial class SftpSession
     private const uint AttrExtended = 0x80000000;
 
     private readonly Process? _process;
+    internal bool HasProcess => _process is not null;
     private readonly Stream _input;
     private readonly Stream _output;
     private readonly Dictionary<string, byte[]> _extensions = new(StringComparer.Ordinal);

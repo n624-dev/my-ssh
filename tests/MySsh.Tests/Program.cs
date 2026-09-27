@@ -3,6 +3,9 @@ using System.Text.Json;
 using MySsh.Core;
 using MySsh.Infrastructure;
 
+if (args.Length == 2 && args[0] == "--digest-helper")
+    return await RemoteDigestTests.RunHelperAsync(args[1]);
+
 // A reproducible, local-only visual fixture; no SSH credentials or server needed.
 if (args.Length > 0 && args[0] == "--layout-demo")
     return LayoutTests.RunDemo(args.Contains("--legacy-driver"), args.Contains("--show-help"));
